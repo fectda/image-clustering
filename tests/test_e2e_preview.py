@@ -8,21 +8,24 @@ import os
 import re
 import subprocess
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
+OUTPUT_BASE = PROJECT_ROOT / "temporal"
 IMAGES_DIR = Path("/home/fectda/temporal/images")
 IMAGE_NAME = "vision-photo-organizer:latest"
 
 
 @pytest.fixture
 def output_dir():
-    """Create a temp output dir for the test run."""
-    tmp = Path(tempfile.mkdtemp(prefix="photo-test-"))
+    """Create a project-local output dir for the test run."""
+    tmp = OUTPUT_BASE / f"test-run-{os.getpid()}"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
     yield tmp
     # Cleanup — force since files might be root-owned from earlier runs
     shutil.rmtree(tmp, ignore_errors=True)
