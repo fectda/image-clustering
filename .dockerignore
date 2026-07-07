@@ -7,4 +7,5 @@ organize.sh
 tests/
 pytest.ini
 scripts/
+!scripts/entrypoint.sh
 *.md
