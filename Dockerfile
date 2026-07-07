@@ -7,8 +7,10 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# For CUDA support, build with: --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# Default to CUDA 12.4. CPU-only torch is UNSUPPORTED — the tool requires GPU.
+# Use `organize.sh` which handles GPU detection and builds with the correct arg.
+# To override: --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 ENV TORCH_INDEX_URL=${TORCH_INDEX_URL}
 
 # Create virtual environment (portable — copy to runtime stage)

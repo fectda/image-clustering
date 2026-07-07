@@ -85,23 +85,24 @@ The HTML gallery is a single file with inline CSS/JS — no external dependencie
 
 ## GPU Support
 
-NVIDIA GPU is **REQUIRED** — the tool will fail if no GPU is detected. Docker image builds with:
+NVIDIA GPU is **REQUIRED** — the tool will fail if no GPU is detected.
 
 ```bash
-# CPU (default)
-docker build -t vision-photo-organizer:latest .
-
-# CUDA 12.4
+# Default: CUDA 12.4 (required for GPU support)
 docker build -t vision-photo-organizer:latest \
   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 .
+
+# Recommended: use the wrapper script (handles GPU detection automatically)
+./organize.sh --input /path/to/photos --output /path/to/output
 ```
 
-The `organize.sh` wrapper handles GPU detection automatically.
+> **Note:** CPU-only builds are UNSUPPORTED. The tool requires an NVIDIA GPU with CUDA.
+> The `organize.sh` wrapper handles GPU detection, builds with CUDA, and runs the container with `--gpus all`.
 
 ## Requirements
 
 - Docker
-- NVIDIA Container Toolkit (for GPU, optional)
+- NVIDIA Container Toolkit (required for GPU support)
 - ~16 GB free disk for output
 
 ## How It Works

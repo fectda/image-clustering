@@ -104,7 +104,31 @@ elif ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
         --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 \
         || die "Docker build failed"
 else
-    info "Image $IMAGE_NAME already exists (use --force-rebuild to rebuild)"
+    info "Image $IMAGE_NAME already exists — verifying GPU support..."
+    GPU_OUTPUT=$(docker run --rm --gpus all --entrypoint python "$IMAGE_NAME" \
+        -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>&1)
+    GPU_EXIT=$?
+    
+    if [ "$GPU_EXIT" -eq 0 ]; then
+        info "GPU support confirmed in existing image"
+    else
+        warn "Existing image does NOT have working GPU support."
+        if [ -z "$GPU_OUTPUT" ]; then
+            # Exit 1 with no output → PyTorch cleanly reports no CUDA device
+            warn "PyTorch reports no CUDA device available in the container."
+            warn "The image was likely built without GPU support."
+            warn "Re-run with --force-rebuild:  ./organize.sh --force-rebuild ..."
+        elif echo "$GPU_OUTPUT" | grep -qi "could not select device driver\|Error response from daemon"; then
+            warn "Docker runtime error detected (not necessarily the image):"
+            warn "$GPU_OUTPUT"
+            warn "Check that nvidia-container-toolkit is installed and Docker is configured for GPU access."
+        else
+            warn "Unexpected error during GPU verification:"
+            warn "$GPU_OUTPUT"
+            warn "Try --force-rebuild or check Docker/nvidia setup."
+        fi
+        die "GPU-required tool cannot proceed without GPU access."
+    fi
 fi
 
 # ── Run container ──

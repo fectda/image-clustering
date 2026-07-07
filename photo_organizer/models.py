@@ -63,8 +63,22 @@ def load_model(model_name: str, device: str | None = None):
     import torch
 
     if not torch.cuda.is_available():
+        log.error("=" * 70)
         log.error("CUDA is not available — GPU is REQUIRED for this tool.")
-        log.error("Run on a machine with an NVIDIA GPU and CUDA installed.")
+        log.error("=" * 70)
+        log.error("Possible causes:")
+        log.error("  1. Image was built without CUDA support")
+        log.error(
+            "     → Rebuild with: --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124"
+        )
+        log.error("  2. Container running without GPU access")
+        log.error("     → Add --gpus all to docker run, or use ./organize.sh")
+        log.error("  3. NVIDIA Container Toolkit not installed on the host")
+        log.error(
+            "     → https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/"
+        )
+        log.error("  4. No NVIDIA GPU on the host machine")
+        log.error("=" * 70)
         sys.exit(1)
     device = "cuda"
     log.info("Using device: %s", device)
