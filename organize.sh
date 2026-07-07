@@ -116,6 +116,8 @@ info "  Output: $OUTPUT_DIR"
 set -x
 docker run --rm \
     $GPU_FLAGS \
+    -e "HOST_UID=$(id -u)" \
+    -e "HOST_GID=$(id -g)" \
     -v "$INPUT_DIR:/data/input:ro" \
     -v "$OUTPUT_DIR:/data/output" \
     "$IMAGE_NAME" \

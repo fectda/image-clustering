@@ -18,8 +18,26 @@ RUN pip install --no-cache-dir \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download vision models into the image (so they don't download on every run)
+# Store in world-readable location so host-UID switching works at runtime
+ENV HF_HOME=/usr/local/share/hf-cache
+COPY scripts/download_models.py /tmp/
+RUN python /tmp/download_models.py && \
+    rm /tmp/download_models.py && \
+    chmod -R a+rX /usr/local/share/hf-cache
+
+# Install gosu for dropping privileges in entrypoint
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gosu; \
+    rm -rf /var/lib/apt/lists/*; \
+    gosu nobody true
+
 # Copy application
-COPY cluster.py .
+COPY photo_organizer/ /app/photo_organizer/
+COPY scripts/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
-ENTRYPOINT ["python", "/app/cluster.py"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "-m", "photo_organizer.main"]
