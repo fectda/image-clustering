@@ -4,3 +4,7 @@ __pycache__
 .DS_Store
 README.md
 organize.sh
+tests/
+pytest.ini
+scripts/
+*.md
