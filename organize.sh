@@ -13,8 +13,9 @@ set -euo pipefail
 #   --preview         Process 10 random photos only
 #   --dry-run         Report without writing
 #   --no-faces        Skip face detection (placeholder)
-#   --min-cluster-size N  HDBSCAN param (default: 5)
-#   --min-samples N       HDBSCAN param (default: 3)
+#   --model           Vision model: dinov2-large (default), dinov2-base, clip, siglip
+#   --umap-components N  UMAP target dimensions (default: 5)
+#   --max-clusters N     Max K for silhouette search (default: 20)
 # ─────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

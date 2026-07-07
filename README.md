@@ -2,7 +2,7 @@
 
 Containerized photo clustering tool using **DINOv2** vision embeddings + **UMAP** dimensionality reduction + **K-Means** clustering. Generates folder-per-cluster output + a self-contained HTML gallery.
 
-Zero local dependencies — everything runs via Docker with optional NVIDIA GPU acceleration.
+Zero local dependencies — everything runs via Docker with **NVIDIA GPU required**.
 
 ## Architecture
 
@@ -85,7 +85,7 @@ The HTML gallery is a single file with inline CSS/JS — no external dependencie
 
 ## GPU Support
 
-NVIDIA GPU is auto-detected. Docker image builds with:
+NVIDIA GPU is **REQUIRED** — the tool will fail if no GPU is detected. Docker image builds with:
 
 ```bash
 # CPU (default)
