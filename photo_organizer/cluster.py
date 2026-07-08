@@ -57,8 +57,8 @@ def recursive_cluster(
         for i, label in enumerate(labels):
             orig_idx = indices[i]
             if label == -1:
-                # Noise images get empty prefix at any depth
-                result[orig_idx] = ""
+                # Noise images retain their parent's prefix and stop recursing
+                result[orig_idx] = _build_prefix(label_path)
             else:
                 clusters.setdefault(label, []).append(orig_idx)
 
