@@ -38,13 +38,13 @@ class TestMinNeighbors:
         from photo_organizer.cluster import min_neighbors
 
         result = min_neighbors(40, 1)
-        assert result == 2  # clamped: min(40, max(0, 2)) = max(2, 0) = 2
+        assert result == 1  # fewer than 2 samples → return 1
 
     def test_zero_samples(self):
         from photo_organizer.cluster import min_neighbors
 
         result = min_neighbors(40, 0)
-        assert result == 2  # edge case: max(2, min(40, max(-1, 2))) = max(2, 2) = 2
+        assert result == 1  # fewer than 2 samples → return 1
 
 
 @pytest.fixture()

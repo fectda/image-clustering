@@ -42,14 +42,14 @@ def main():
 
     # Phase 3: Embed
     if backend == "hybrid":
-        embeddings = extract_hybrid_embeddings(
+        embeddings, images = extract_hybrid_embeddings(
             model,
             images,
             device,
             args.batch_size,
         )
     else:
-        embeddings = extract_embeddings(
+        embeddings, images = extract_embeddings(
             model,
             processor,
             backend,
@@ -75,15 +75,23 @@ def main():
         metrics["n_clusters"],
         metrics["n_outliers"],
         metrics["dbcv"],
-        len(images),
+        embeddings.shape[0],
     )
 
     if args.dry_run:
-        export_clusters(images, labels, output_dir, dry_run=True)
+        export_clusters(
+            images, labels, output_dir, dry_run=True, export_unclustered=args.export_unclustered
+        )
         return
 
     # Phase 5: Export
-    groups = export_clusters(images, labels, output_dir, dry_run=False)
+    groups = export_clusters(
+        images, labels, output_dir, dry_run=False, export_unclustered=args.export_unclustered
+    )
+
+    if not groups:
+        log.info("No clusters to display")
+        return
 
     # Phase 6: Gallery
     generate_gallery(output_dir, groups)

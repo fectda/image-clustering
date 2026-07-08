@@ -40,11 +40,19 @@ EOF
 RUN chmod -R a+rX /venv/hf-cache
 
 # Pre-download Qwen3-VL-Embedding-2B for hybrid model support
+# Tries AutoImageProcessor first; falls back to AutoProcessor (see _load_qwen3)
 RUN python <<EOF
-from transformers import AutoImageProcessor, AutoModel
+from transformers import AutoModel
 m = "Qwen/Qwen3-VL-Embedding-2B"
 AutoModel.from_pretrained(m)
-AutoImageProcessor.from_pretrained(m)
+
+try:
+    from transformers import AutoImageProcessor
+    AutoImageProcessor.from_pretrained(m)
+except (ImportError, OSError):
+    from transformers import AutoProcessor
+    AutoProcessor.from_pretrained(m)
+
 print("✅", m)
 EOF
 RUN chmod -R a+rX /venv/hf-cache

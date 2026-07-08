@@ -18,12 +18,16 @@ class TestExtractHybridEmbeddings:
 
         dinov2_emb = np.random.rand(self.N, 1024).astype(np.float32)
         qwen3_emb = np.random.rand(self.N, 4096).astype(np.float32)
-        mock_extract.side_effect = [dinov2_emb, qwen3_emb]
+        paths = ["img"] * self.N
+        mock_extract.side_effect = [(dinov2_emb, paths), (qwen3_emb, paths)]
 
         models = {"dinov2": (MagicMock(), MagicMock()), "qwen3": (MagicMock(), MagicMock())}
-        result = extract_hybrid_embeddings(models, ["img"] * self.N, "cpu", batch_size=32)
+        result, result_paths = extract_hybrid_embeddings(
+            models, ["img"] * self.N, "cpu", batch_size=32
+        )
 
         assert result.shape == (self.N, 5120)
+        assert len(result_paths) == self.N
         # Verify L2-normalized: each row should have norm ≈ 1.0
         norms = np.linalg.norm(result, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-6)
@@ -33,7 +37,10 @@ class TestExtractHybridEmbeddings:
         """DINOv2 returns empty array → sys.exit(1)."""
         from photo_organizer.embeddings import extract_hybrid_embeddings
 
-        mock_extract.side_effect = [np.array([]), np.random.rand(self.N, 4096)]
+        mock_extract.side_effect = [
+            (np.array([]), []),
+            (np.random.rand(self.N, 4096), ["img"] * self.N),
+        ]
 
         models = {"dinov2": (MagicMock(), MagicMock()), "qwen3": (MagicMock(), MagicMock())}
         with pytest.raises(SystemExit) as exc_info:
@@ -45,7 +52,10 @@ class TestExtractHybridEmbeddings:
         """Qwen3 returns empty array → sys.exit(1)."""
         from photo_organizer.embeddings import extract_hybrid_embeddings
 
-        mock_extract.side_effect = [np.random.rand(self.N, 1024), np.array([])]
+        mock_extract.side_effect = [
+            (np.random.rand(self.N, 1024), ["img"] * self.N),
+            (np.array([]), []),
+        ]
 
         models = {"dinov2": (MagicMock(), MagicMock()), "qwen3": (MagicMock(), MagicMock())}
         with pytest.raises(SystemExit) as exc_info:
@@ -58,8 +68,8 @@ class TestExtractHybridEmbeddings:
         from photo_organizer.embeddings import extract_hybrid_embeddings
 
         mock_extract.side_effect = [
-            np.random.rand(10, 1024),
-            np.random.rand(9, 4096),
+            (np.random.rand(10, 1024), ["img"] * 10),
+            (np.random.rand(9, 4096), ["img"] * 9),
         ]
 
         models = {"dinov2": (MagicMock(), MagicMock()), "qwen3": (MagicMock(), MagicMock())}

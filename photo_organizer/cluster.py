@@ -25,6 +25,28 @@ def reduce_and_cluster(
 
     n_samples = len(embeddings)
 
+    # Early exit: need at least 2 samples for UMAP + HDBSCAN
+    if n_samples < 2:
+        log.warning("Only %d sample(s) — skipping clustering, all labeled as noise", n_samples)
+        labels = np.full(n_samples, -1, dtype=int)
+        metrics = {
+            "dbcv": 0.0,
+            "n_clusters": 0,
+            "n_outliers": n_samples,
+        }
+        return labels, metrics
+
+    # Clamp n_components to < n_samples (UMAP requires n_components < n_samples)
+    orig_components = n_components
+    n_components = min(n_components, max(1, n_samples - 1))
+    if n_components != orig_components:
+        log.info(
+            "Adjusted n_components from %d to %d for %d samples",
+            orig_components,
+            n_components,
+            n_samples,
+        )
+
     # UMAP dimensionality reduction
     effective_neighbors = min_neighbors(n_neighbors, n_samples)
     log.info(
@@ -107,4 +129,7 @@ def reduce_and_cluster(
 
 def min_neighbors(requested: int, n_samples: int) -> int:
     """Ensure n_neighbors < n_samples and at least 2."""
-    return max(2, min(requested, max(n_samples - 1, 2)))
+    # Defensive: unreachable via reduce_and_cluster (returns early), guards against direct calls
+    if n_samples < 2:
+        return 1
+    return max(2, min(requested, n_samples - 1))

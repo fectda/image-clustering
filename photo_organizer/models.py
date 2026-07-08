@@ -126,7 +126,7 @@ def load_model(model_name: str, device: str | None = None):
         log.error("  4. No NVIDIA GPU on the host machine")
         log.error("=" * 70)
         sys.exit(1)
-    device = "cuda"
+    device = device or "cuda"
     log.info("Using device: %s", device)
 
     if model_name in ("dinov2-large", "dinov2-base"):

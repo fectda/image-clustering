@@ -17,12 +17,9 @@ def scan_images(input_dir: str) -> list[Path]:
         log.error("Input directory does not exist: %s", input_dir)
         sys.exit(1)
 
-    files = []
-    for ext in IMAGE_EXTENSIONS:
-        files.extend(input_path.rglob(f"*{ext}"))
-        files.extend(input_path.rglob(f"*{ext.upper()}"))
-
-    files = sorted(set(files))
+    files = sorted(
+        p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+    )
     if not files:
         log.error("No images found (jpg/jpeg/png/webp) in: %s", input_dir)
         sys.exit(1)

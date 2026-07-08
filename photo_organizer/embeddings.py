@@ -18,21 +18,33 @@ def _extract_single_backend(
     image_paths: list[Path],
     device: str,
     batch_size: int,
-) -> np.ndarray:
-    """Extract embeddings from a single backend. Returns (N, D) L2-normalized array."""
+) -> tuple[np.ndarray, list[Path]]:
+    """Extract embeddings from a single backend.
+
+    Returns
+    -------
+    (N, D) L2-normalized array and filtered list of valid image paths.
+    """
     import torch
 
+    if batch_size < 1:
+        log.warning("batch_size=%d is invalid, using batch_size=1", batch_size)
+        batch_size = 1
+
     all_embeddings = []
+    valid_paths: list[Path] = []
 
     with torch.no_grad():
         for i in tqdm(range(0, len(image_paths), batch_size), desc=f"Embedding ({backend})"):
             batch_paths = image_paths[i : i + batch_size]
             images = []
+            batch_valid: list[Path] = []
 
             for img_path in batch_paths:
                 try:
                     img = Image.open(img_path).convert("RGB")
                     images.append(img)
+                    batch_valid.append(img_path)
                 except Exception as exc:
                     log.warning("Skipping corrupt image: %s (%s)", img_path, exc)
 
@@ -59,11 +71,12 @@ def _extract_single_backend(
 
             features = features / features.norm(dim=-1, keepdim=True)
             all_embeddings.append(features.cpu().numpy())
+            valid_paths.extend(batch_valid)
 
     if not all_embeddings:
-        return np.array([])
+        return np.array([]), []
 
-    return np.concatenate(all_embeddings, axis=0)
+    return np.concatenate(all_embeddings, axis=0), valid_paths
 
 
 def extract_hybrid_embeddings(
@@ -71,11 +84,15 @@ def extract_hybrid_embeddings(
     image_paths: list[Path],
     device: str,
     batch_size: int = 32,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[Path]]:
     """Extract hybrid embeddings: DINOv2 (1024d) + Qwen3 (4096d) → (N, 5120).
 
     Each sub-model's output is L2-normalized independently before concatenation.
     The combined embedding is L2-normalized after concatenation.
+
+    Returns
+    -------
+    (N, 5120) L2-normalized array and filtered list of valid image paths.
     """
     log.info(
         "Extracting hybrid embeddings for %d images (DINOv2 + Qwen3) ...",
@@ -84,7 +101,7 @@ def extract_hybrid_embeddings(
 
     # Extract DINOv2 embeddings (1024d)
     dinov2_model, dinov2_proc = models["dinov2"]
-    dinov2_emb = _extract_single_backend(
+    dinov2_emb, valid_paths = _extract_single_backend(
         dinov2_model, dinov2_proc, "dinov2", image_paths, device, batch_size
     )
     if dinov2_emb.size == 0:
@@ -95,7 +112,7 @@ def extract_hybrid_embeddings(
     # Extract Qwen3 embeddings (4096d) — may need smaller batch size
     qwen3_batch = min(batch_size, 16)
     qwen3_model, qwen3_proc = models["qwen3"]
-    qwen3_emb = _extract_single_backend(
+    qwen3_emb, qwen3_paths = _extract_single_backend(
         qwen3_model, qwen3_proc, "qwen3", image_paths, device, qwen3_batch
     )
     if qwen3_emb.size == 0:
@@ -112,6 +129,16 @@ def extract_hybrid_embeddings(
         )
         sys.exit(1)
 
+    # Verify both backends processed the same paths
+    if valid_paths != qwen3_paths:
+        log.error(
+            "Path mismatch between DINOv2 and Qwen3 (%d vs %d). "
+            "Both backends must process the same images.",
+            len(valid_paths),
+            len(qwen3_paths),
+        )
+        sys.exit(1)
+
     # Concatenate → L2-normalize
     combined = np.concatenate([dinov2_emb, qwen3_emb], axis=1)
     norms = np.linalg.norm(combined, axis=1, keepdims=True)
@@ -119,7 +146,7 @@ def extract_hybrid_embeddings(
     combined = combined / norms
 
     log.info("Hybrid embedding shape: %s", combined.shape)
-    return combined
+    return combined, valid_paths
 
 
 def extract_embeddings(
@@ -129,19 +156,26 @@ def extract_embeddings(
     image_paths: list[Path],
     device: str,
     batch_size: int = 32,
-) -> np.ndarray:
-    """Extract L2-normalized embeddings for all images. Returns (N, D) array."""
+) -> tuple[np.ndarray, list[Path]]:
+    """Extract L2-normalized embeddings for all images.
+
+    Returns
+    -------
+    (N, D) L2-normalized array and filtered list of valid image paths.
+    """
     log.info(
         "Extracting embeddings for %d images (backend=%s) ...",
         len(image_paths),
         backend,
     )
 
-    embeddings = _extract_single_backend(model, processor, backend, image_paths, device, batch_size)
+    embeddings, valid_paths = _extract_single_backend(
+        model, processor, backend, image_paths, device, batch_size
+    )
 
     if embeddings.size == 0:
         log.error("No valid images could be processed.")
         sys.exit(1)
 
     log.info("Embedding shape: %s", embeddings.shape)
-    return embeddings
+    return embeddings, valid_paths

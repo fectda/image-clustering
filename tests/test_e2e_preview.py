@@ -59,6 +59,8 @@ def test_e2e_preview_gallery(output_dir):
             "--output",
             "/data/output",
             "--preview",
+            "--min-cluster-size",
+            "2",
         ],
         capture_output=True,
         text=True,

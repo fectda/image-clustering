@@ -21,10 +21,20 @@ def export_clusters(
     labels: np.ndarray,
     output_dir: Path,
     dry_run: bool = False,
+    export_unclustered: bool = True,
 ) -> dict[int, list[tuple[int, Path]]]:
-    """Organize images into cluster folders."""
+    """Organize images into cluster folders.
+
+    Parameters
+    ----------
+    export_unclustered : bool
+        If True (default), label=-1 (noise) images are exported to unclustered/.
+        If False, noise images are skipped entirely.
+    """
     groups: dict[int, list[tuple[int, Path]]] = {}
     for idx, (label, path) in enumerate(zip(labels, image_paths, strict=False)):
+        if not export_unclustered and label == -1:
+            continue
         groups.setdefault(int(label), []).append((idx, path))
 
     if dry_run:
@@ -53,5 +63,12 @@ def export_clusters(
     if n_outliers:
         log.info("Unclustered images: %d → unclustered/", n_outliers)
 
-    log.info("Exported %d images to %s", len(image_paths), output_dir)
+    if not dry_run:
+        log.info("Exported %d images to %s", sum(len(v) for v in groups.values()), output_dir)
+    else:
+        log.info(
+            "Dry run: would export %d images to %s",
+            sum(len(v) for v in groups.values()),
+            output_dir,
+        )
     return groups

@@ -78,4 +78,10 @@ def parse_args(argv=None):
         default=32,
         help="Batch size for embedding extraction (default: 32)",
     )
+    parser.add_argument(
+        "--export-unclustered",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Export unclustered (noise) images to unclustered/ folder (default: true)",
+    )
     return parser.parse_args(argv)
