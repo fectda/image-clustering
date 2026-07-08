@@ -22,7 +22,7 @@ def recursive_cluster(
     embeddings: np.ndarray,
     _image_paths: list | None = None,
     max_iterations: int = 3,
-    min_cluster_size: int = 15,
+    min_cluster_size: int = 3,
 ) -> dict[int, str]:
     """Stack-based recursive clustering. Returns {image_index: prefix_string}.
 
@@ -75,8 +75,8 @@ def reduce_and_cluster(
     n_neighbors: int = 40,
     min_dist: float = 0.0,
     metric: str = "cosine",
-    min_cluster_size: int = 15,
-    min_samples: int = 5,
+    min_cluster_size: int = 3,
+    min_samples: int = 1,
 ) -> tuple[np.ndarray, dict]:
     """Reduce dims with UMAP, then cluster with HDBSCAN.
 

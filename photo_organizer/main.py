@@ -68,7 +68,7 @@ def organize_photos(
         embeddings,
         images,
         max_iterations=max_iterations,
-        min_cluster_size=15,
+        min_cluster_size=3,
     )
 
     # Phase 5: Export
