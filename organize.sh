@@ -72,6 +72,29 @@ done
 [[ -n "$INPUT_DIR" ]]  || die "--input is required"
 [[ -n "$OUTPUT_DIR" ]] || die "--output is required"
 
+# ── SMB Support ──
+SMB_MOUNT_DIR=""
+if [[ "$INPUT_DIR" == smb://* ]]; then
+    info "SMB network share detected as input."
+    # Decode URL-encoded characters (e.g. %20 -> space)
+    DECODED_URL=$(python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1]))" "$INPUT_DIR")
+    
+    # Strip smb:// and format as UNC path
+    UNC_PATH="//${DECODED_URL#smb://}"
+    
+    # Create mount point
+    SMB_MOUNT_DIR=$(mktemp -d /tmp/photo_smb_mount_XXXXXX)
+    
+    info "Mounting $UNC_PATH to $SMB_MOUNT_DIR (guest mode)..."
+    sudo mount -t cifs "$UNC_PATH" "$SMB_MOUNT_DIR" -o guest,uid=$(id -u),gid=$(id -g) || die "Failed to mount SMB share. Make sure cifs-utils is installed and you have sudo access."
+    
+    # Trap to unmount on exit
+    trap 'info "Unmounting SMB share..."; sudo umount "$SMB_MOUNT_DIR" && rmdir "$SMB_MOUNT_DIR"' EXIT
+    
+    # Override INPUT_DIR for the rest of the script
+    INPUT_DIR="$SMB_MOUNT_DIR"
+fi
+
 INPUT_DIR="$(realpath "$INPUT_DIR")"
 OUTPUT_DIR="$(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
 
