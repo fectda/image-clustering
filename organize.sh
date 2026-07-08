@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./organize.sh --input /path/to/photos --output /path/to/out [OPTIONS]
 #
 # Options:
-#   --input, -i       Input directory (required)
+#   --input, -i       Input directory or smb:// URI (required)
 #   --output, -o      Output directory (required)
 #   --preview         Process 10 random photos only
 #   --dry-run         Report without writing
@@ -16,6 +16,12 @@ set -euo pipefail
 #   --model           Vision model: dinov2-large (default), dinov2-base, clip, siglip, hybrid
 #   --umap-components N  UMAP target dimensions (default: 20)
 #   --min-cluster-size N  HDBSCAN minimum cluster size (default: 15)
+#
+# SMB/CIFS support:
+#   Use --input "smb://server/share/path" to mount a network share.
+#   Set SMB_USER and SMB_PASS env vars for authenticated shares.
+#   Port is extracted from URI (e.g. smb://server:443/share).
+#   Requires cifs-utils on the host: sudo apt install cifs-utils
 # ─────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -72,27 +78,65 @@ done
 [[ -n "$INPUT_DIR" ]]  || die "--input is required"
 [[ -n "$OUTPUT_DIR" ]] || die "--output is required"
 
-# ── SMB Support ──
-SMB_MOUNT_DIR=""
+# ── SMB/CIFS mount handling ──
+SMB_INPUT_MOUNT_DIR=""
+SMB_OUTPUT_MOUNT_DIR=""
+
+cleanup_smb_mounts() {
+    local dir
+    for dir in "$SMB_INPUT_MOUNT_DIR" "$SMB_OUTPUT_MOUNT_DIR"; do
+        [[ -z "$dir" ]] && continue
+        info "Unmounting SMB share: $dir"
+        sudo umount "$dir" 2>/dev/null || true
+        rmdir "$dir" 2>/dev/null || true
+    done
+}
+trap cleanup_smb_mounts EXIT
+
+# Shared SMB mounter: _mount_smb <label> <uri> <outvar>
+#   label   — "input" or "output" (for mount dir naming and messages)
+#   uri     — smb://... URI
+#   outvar  — name of global variable to receive the mount path
+_mount_smb() {
+    local label="$1" uri="$2" outvar="$3"
+    local unc_path decoded_path smb_port port_opts smb_opts mount_dir
+
+    unc_path="//${uri#smb://}"
+    decoded_path=$(python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1]))" "$unc_path" 2>/dev/null || echo "$unc_path")
+
+    smb_port=""; port_opts=""
+    if [[ "$decoded_path" =~ ^//[^/]+:([0-9]+) ]]; then
+        smb_port="${BASH_REMATCH[1]}"
+        port_opts=",port=$smb_port"
+    fi
+
+    if [[ -n "${SMB_USER:-}" ]]; then
+        smb_opts="username=$SMB_USER,password=${SMB_PASS:-},uid=$(id -u),gid=$(id -g)$port_opts"
+        [[ -z "${SMB_PASS:-}" ]] && warn "SMB_PASS is empty — some shares allow this, some don't."
+    else
+        smb_opts="guest,uid=$(id -u),gid=$(id -g)$port_opts"
+    fi
+
+    if ! command -v mount.cifs &>/dev/null; then
+        die "mount.cifs not found. Install cifs-utils: sudo apt install cifs-utils"
+    fi
+
+    mount_dir=$(mktemp -d "/tmp/photo_smb_${label}_XXXXXX")
+    sudo mount -t cifs "$decoded_path" "$mount_dir" -o "$smb_opts" \
+        || die "Failed to mount SMB $label share: $decoded_path"
+
+    printf -v "$outvar" "%s" "$mount_dir"
+    info "Mounted $decoded_path → $mount_dir"
+}
+
 if [[ "$INPUT_DIR" == smb://* ]]; then
-    info "SMB network share detected as input."
-    # Decode URL-encoded characters (e.g. %20 -> space)
-    DECODED_URL=$(python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1]))" "$INPUT_DIR")
-    
-    # Strip smb:// and format as UNC path
-    UNC_PATH="//${DECODED_URL#smb://}"
-    
-    # Create mount point
-    SMB_MOUNT_DIR=$(mktemp -d /tmp/photo_smb_mount_XXXXXX)
-    
-    info "Mounting $UNC_PATH to $SMB_MOUNT_DIR (guest mode)..."
-    sudo mount -t cifs "$UNC_PATH" "$SMB_MOUNT_DIR" -o guest,uid=$(id -u),gid=$(id -g) || die "Failed to mount SMB share. Make sure cifs-utils is installed and you have sudo access."
-    
-    # Trap to unmount on exit
-    trap 'info "Unmounting SMB share..."; sudo umount "$SMB_MOUNT_DIR" && rmdir "$SMB_MOUNT_DIR"' EXIT
-    
-    # Override INPUT_DIR for the rest of the script
-    INPUT_DIR="$SMB_MOUNT_DIR"
+    _mount_smb "input" "$INPUT_DIR" "SMB_INPUT_MOUNT_DIR"
+    INPUT_DIR="$SMB_INPUT_MOUNT_DIR"
+fi
+
+if [[ "$OUTPUT_DIR" == smb://* ]]; then
+    _mount_smb "output" "$OUTPUT_DIR" "SMB_OUTPUT_MOUNT_DIR"
+    OUTPUT_DIR="$SMB_OUTPUT_MOUNT_DIR"
 fi
 
 INPUT_DIR="$(realpath "$INPUT_DIR")"

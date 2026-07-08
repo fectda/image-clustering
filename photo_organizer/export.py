@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -75,6 +76,27 @@ def export_clusters(
     return groups
 
 
+def _verified_copy(src: Path, dest: Path, retries: int = 2) -> None:
+    """Copy src to dest with size verification and retry on transient errors.
+
+    Raises the last OSError if all attempts fail or size mismatch is detected.
+    """
+    last_exc: OSError | None = None
+    for attempt in range(retries):
+        try:
+            shutil.copy2(str(src), str(dest))
+            if dest.stat().st_size != src.stat().st_size:
+                raise OSError(
+                    f"Size mismatch after copy: src={src.stat().st_size} dest={dest.stat().st_size}"
+                )
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(1)
+    raise last_exc  # type: ignore[misc]
+
+
 def flat_export(
     image_paths: list[Path],
     prefixes: dict[int, str],
@@ -119,8 +141,8 @@ def flat_export(
         try:
             shutil.move(str(src_path), str(dest))
         except OSError:
-            # Cross-device link: fallback to copy + remove
-            shutil.copy2(str(src_path), str(dest))
+            # Cross-device link: fallback to verified copy + remove
+            _verified_copy(src_path, dest)
             os.remove(str(src_path))
 
         moved_count += 1

@@ -117,7 +117,7 @@ class TestFlatExport:
         assert count == 0
 
     def test_flat_export_cross_device(self, tmp_path):
-        """shutil.move raises OSError → fallback to shutil.copy2 + os.remove."""
+        """shutil.move raises OSError → fallback to _verified_copy + os.remove."""
         from photo_organizer.export import flat_export
 
         image_paths = [Path("/fake/photo.jpg")]
@@ -128,16 +128,16 @@ class TestFlatExport:
                 "photo_organizer.export.shutil.move",
                 side_effect=OSError("Invalid cross-device link"),
             ),
-            patch("photo_organizer.export.shutil.copy2") as mock_copy,
+            patch("photo_organizer.export._verified_copy") as mock_verified,
             patch("photo_organizer.export.os.remove") as mock_remove,
         ):
             count = flat_export(image_paths, prefixes, tmp_path, dry_run=False)
 
         assert count == 1
-        mock_copy.assert_called_once()
-        src_copy, dst_copy = mock_copy.call_args[0]
-        assert src_copy == str(image_paths[0])
-        assert dst_copy == str(tmp_path / "c0_photo.jpg")
+        mock_verified.assert_called_once()
+        src_copy, dst_copy = mock_verified.call_args[0]
+        assert src_copy == image_paths[0]
+        assert dst_copy == tmp_path / "c0_photo.jpg"
         mock_remove.assert_called_once_with(str(image_paths[0]))
 
     def test_flat_export_returns_count(self, tmp_path):
@@ -165,3 +165,84 @@ class TestFlatExport:
         assert count == 1
         dest = mock_move.call_args[0][1]
         assert dest == str(tmp_path / "photo.jpg")
+
+
+class TestVerifiedCopy:
+    """_verified_copy() — copy with size verification and retry."""
+
+    def test_size_mismatch_raises_oserror(self, tmp_path):
+        """copy2 succeeds but dest size differs → OSError, source NOT removed."""
+        from photo_organizer.export import _verified_copy
+
+        src = tmp_path / "source.jpg"
+        dest = tmp_path / "dest.jpg"
+        src.write_bytes(b"\x00" * 100)
+
+        def stat_side_effect(path_self):
+            """Return different sizes for src vs dest based on the object."""
+            s = MagicMock()
+            # Use object identity to distinguish src from dest
+            if path_self is src:
+                s.st_size = 100
+            else:
+                s.st_size = 50
+            return s
+
+        with (
+            patch("photo_organizer.export.shutil.copy2"),
+            patch("photo_organizer.export.os.remove") as mock_remove,
+            patch.object(Path, "stat", stat_side_effect),
+        ):
+            with pytest.raises(OSError, match="Size mismatch"):
+                _verified_copy(src, dest)
+
+        mock_remove.assert_not_called()
+
+    def test_copy_oserror_preserves_source(self, tmp_path):
+        """copy2 raises OSError → source file is NOT deleted."""
+        from photo_organizer.export import _verified_copy
+
+        src = tmp_path / "source.jpg"
+        dest = tmp_path / "dest.jpg"
+        src.write_bytes(b"\x00" * 100)
+
+        with (
+            patch(
+                "photo_organizer.export.shutil.copy2",
+                side_effect=OSError("Network unreachable"),
+            ),
+            patch("photo_organizer.export.os.remove") as mock_remove,
+        ):
+            with pytest.raises(OSError, match="Network unreachable"):
+                _verified_copy(src, dest)
+
+        mock_remove.assert_not_called()
+
+    def test_retry_succeeds_on_second_attempt(self, tmp_path):
+        """First copy2 fails, second succeeds with correct size → no exception."""
+        from photo_organizer.export import _verified_copy
+
+        src = tmp_path / "source.jpg"
+        dest = tmp_path / "dest.jpg"
+        src.write_bytes(b"\x00" * 100)
+
+        call_count = 0
+
+        def copy2_side_effect(src_str, dest_str):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OSError("Transient network error")
+            # Second call succeeds — write actual data so stat works
+            Path(dest_str).write_bytes(b"\x00" * 100)
+
+        with (
+            patch("photo_organizer.export.shutil.copy2", side_effect=copy2_side_effect),
+            patch("photo_organizer.export.time.sleep"),
+            patch("photo_organizer.export.os.remove") as mock_remove,
+        ):
+            # Should NOT raise — second attempt succeeds
+            _verified_copy(src, dest, retries=2)
+
+        assert call_count == 2
+        mock_remove.assert_not_called()

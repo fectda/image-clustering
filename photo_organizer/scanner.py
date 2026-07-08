@@ -17,9 +17,15 @@ def scan_images(input_dir: str) -> list[Path]:
         log.error("Input directory does not exist: %s", input_dir)
         sys.exit(1)
 
-    files = sorted(
-        p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-    )
+    files = []
+    for p in input_path.rglob("*"):
+        try:
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
+                files.append(p)
+        except (PermissionError, OSError):
+            log.warning("Skipping unreadable file: %s", p)
+            continue
+    files = sorted(files)
     if not files:
         log.error("No images found (jpg/jpeg/png/webp) in: %s", input_dir)
         sys.exit(1)
