@@ -7,3 +7,4 @@ numpy>=1.24.0
 Pillow>=10.0.0
 tqdm>=4.65.0
 timm>=0.9.0
+jinja2>=3.1
