@@ -162,7 +162,7 @@ def reduce_and_cluster(
     else:
         from hdbscan.validity import validity_index
 
-        dbcv_score = float(validity_index(reduced, labels))
+        dbcv_score = float(validity_index(reduced.astype(np.float64), labels))
 
     metrics = {
         "dbcv": dbcv_score,
