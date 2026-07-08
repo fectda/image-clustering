@@ -17,7 +17,7 @@ def export_clusters(
 ) -> dict[int, list[tuple[int, Path]]]:
     """Organize images into cluster folders."""
     groups: dict[int, list[tuple[int, Path]]] = {}
-    for idx, (label, path) in enumerate(zip(labels, image_paths)):
+    for idx, (label, path) in enumerate(zip(labels, image_paths, strict=False)):
         groups.setdefault(int(label), []).append((idx, path))
 
     if dry_run:

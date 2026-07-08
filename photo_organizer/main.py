@@ -1,16 +1,15 @@
 """Photo Organizer — CLI tool for visual clustering using vision embeddings + UMAP + K-Means."""
 
 import logging
-import sys
 from pathlib import Path
 
 from photo_organizer.cli import parse_args
-from photo_organizer.scanner import scan_images, sample_preview
-from photo_organizer.models import load_model
-from photo_organizer.embeddings import extract_embeddings
 from photo_organizer.cluster import reduce_and_cluster
+from photo_organizer.embeddings import extract_embeddings
 from photo_organizer.export import export_clusters
 from photo_organizer.gallery import generate_gallery
+from photo_organizer.models import load_model
+from photo_organizer.scanner import sample_preview, scan_images
 
 logging.basicConfig(
     level=logging.INFO,

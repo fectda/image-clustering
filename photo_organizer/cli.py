@@ -7,9 +7,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Cluster photos by visual similarity using vision embeddings + UMAP + K-Means",
     )
-    parser.add_argument(
-        "--input", "-i", required=True, help="Input directory containing photos"
-    )
+    parser.add_argument("--input", "-i", required=True, help="Input directory containing photos")
     parser.add_argument(
         "--output",
         "-o",

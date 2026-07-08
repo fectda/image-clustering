@@ -6,8 +6,8 @@ and verifies the output is correct.
 
 import os
 import re
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -65,9 +65,7 @@ def test_e2e_preview_gallery(output_dir):
         timeout=300,
     )
 
-    assert result.returncode == 0, (
-        f"Container failed:\n{result.stderr}\n{result.stdout}"
-    )
+    assert result.returncode == 0, f"Container failed:\n{result.stderr}\n{result.stdout}"
 
     # ── Verify gallery exists and is readable ──
     index_html = output_dir / "index.html"

@@ -9,7 +9,6 @@ log = logging.getLogger("cluster")
 
 def _load_dinov2(model_name: str, device: str):
     """Load DINOv2 model via HuggingFace transformers."""
-    import torch
     from transformers import AutoImageProcessor, AutoModel
 
     hf_name = {
@@ -30,7 +29,6 @@ def _load_dinov2(model_name: str, device: str):
 
 def _load_clip(device: str):
     """Load CLIP ViT-B/32."""
-    import torch
     import clip
 
     log.info("Loading CLIP ViT-B/32 ...")
@@ -43,7 +41,6 @@ def _load_clip(device: str):
 
 def _load_siglip(device: str):
     """Load SigLIP via HuggingFace transformers."""
-    import torch
     from transformers import AutoImageProcessor, AutoModel
 
     hf_name = "google/siglip-base-patch16-224"
@@ -74,9 +71,7 @@ def load_model(model_name: str, device: str | None = None):
         log.error("  2. Container running without GPU access")
         log.error("     → Add --gpus all to docker run, or use ./organize.sh")
         log.error("  3. NVIDIA Container Toolkit not installed on the host")
-        log.error(
-            "     → https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/"
-        )
+        log.error("     → https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/")
         log.error("  4. No NVIDIA GPU on the host machine")
         log.error("=" * 70)
         sys.exit(1)

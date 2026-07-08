@@ -52,7 +52,6 @@ def reduce_and_cluster(
         km = KMeans(n_clusters=2, random_state=42, n_init="auto")
         best_labels = km.fit_predict(reduced)
 
-    n_noise = 0  # K-Means assigns every point to a cluster
     log.info(
         "K-Means: k=%d (silhouette=%.3f), %d clusters",
         best_k,
