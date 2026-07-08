@@ -98,9 +98,9 @@ def reduce_and_cluster(
         }
         return labels, metrics
 
-    # Clamp n_components to < n_samples (UMAP requires n_components < n_samples)
+    # Clamp n_components to < n_samples - 1 to avoid scipy eigsh error (k >= N)
     orig_components = n_components
-    n_components = min(n_components, max(1, n_samples - 1))
+    n_components = min(n_components, max(1, n_samples - 2))
     if n_components != orig_components:
         log.info(
             "Adjusted n_components from %d to %d for %d samples",
