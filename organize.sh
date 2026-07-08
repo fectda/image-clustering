@@ -142,7 +142,7 @@ docker run --rm \
     $GPU_FLAGS \
     -e "HOST_UID=$(id -u)" \
     -e "HOST_GID=$(id -g)" \
-    -v "$INPUT_DIR:/data/input:ro" \
+    -v "$INPUT_DIR:/data/input" \
     -v "$OUTPUT_DIR:/data/output" \
     "$IMAGE_NAME" \
     --input /data/input --output /data/output \
