@@ -55,6 +55,45 @@ def _load_siglip(device: str):
     return model, processor, device
 
 
+def _load_qwen3(device: str):
+    """Load Qwen3-VL-Embedding-2B via HuggingFace transformers."""
+    from transformers import AutoImageProcessor, AutoModel
+
+    hf_name = "Qwen/Qwen3-VL-Embedding-2B"
+    log.info("Loading Qwen3 model: %s ...", hf_name)
+    t0 = time.time()
+
+    processor = AutoImageProcessor.from_pretrained(hf_name)
+    model = AutoModel.from_pretrained(hf_name).to(device)
+    model.eval()
+
+    log.info("Qwen3 loaded in %.1fs", time.time() - t0)
+    return model, processor, device
+
+
+def _load_hybrid(device: str):
+    """Load both DINOv2-large and Qwen3-VL-Embedding-2B for hybrid embeddings.
+
+    Returns a dict with both models for sequential embedding extraction.
+    """
+    log.info("Loading hybrid model (DINOv2-large + Qwen3-2B) ...")
+    t0 = time.time()
+
+    dinov2_model, dinov2_proc, _ = _load_dinov2("dinov2-large", device)
+    qwen3_model, qwen3_proc, _ = _load_qwen3(device)
+
+    log.info("Hybrid models loaded in %.1fs", time.time() - t0)
+    return (
+        {
+            "dinov2": (dinov2_model, dinov2_proc),
+            "qwen3": (qwen3_model, qwen3_proc),
+        },
+        None,  # no single processor
+        "hybrid",
+        device,
+    )
+
+
 def load_model(model_name: str, device: str | None = None):
     """Load the selected model on GPU. Fails if CUDA is not available."""
     import torch
@@ -87,6 +126,8 @@ def load_model(model_name: str, device: str | None = None):
     elif model_name == "siglip":
         model, processor, device = _load_siglip(device)
         backend = "siglip"
+    elif model_name == "hybrid":
+        model, processor, backend, device = _load_hybrid(device)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 

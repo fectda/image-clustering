@@ -39,6 +39,16 @@ print("✅", m)
 EOF
 RUN chmod -R a+rX /venv/hf-cache
 
+# Pre-download Qwen3-VL-Embedding-2B for hybrid model support
+RUN python <<EOF
+from transformers import AutoImageProcessor, AutoModel
+m = "Qwen/Qwen3-VL-Embedding-2B"
+AutoModel.from_pretrained(m)
+AutoImageProcessor.from_pretrained(m)
+print("✅", m)
+EOF
+RUN chmod -R a+rX /venv/hf-cache
+
 # ============================================================
 # Stage 2: Runtime — minimal production image
 # ============================================================

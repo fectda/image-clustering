@@ -23,6 +23,15 @@ def main():
     args = parse_args()
     output_dir = Path(args.output)
 
+    # Deprecation warning for --max-clusters
+    import sys
+
+    if "--max-clusters" in sys.argv:
+        log.warning(
+            "DEPRECATED: --max-clusters is ignored by HDBSCAN. "
+            "Use --min-cluster-size instead (default: 15)."
+        )
+
     # Phase 1: Scan
     images = scan_images(args.input)
     if args.preview:
