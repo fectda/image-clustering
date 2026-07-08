@@ -7,6 +7,68 @@ import numpy as np
 log = logging.getLogger("cluster")
 
 
+def _build_prefix(label_path: list[int]) -> str:
+    """Build a hierarchical prefix string from a list of cluster labels.
+
+    Example: [5, 3] → "c5_c3_"
+    Empty list → "" (noise at all levels).
+    """
+    if not label_path:
+        return ""
+    return "".join(f"c{label}_" for label in label_path)
+
+
+def recursive_cluster(
+    embeddings: np.ndarray,
+    _image_paths: list | None = None,
+    max_iterations: int = 3,
+    min_cluster_size: int = 15,
+) -> dict[int, str]:
+    """Stack-based recursive clustering. Returns {image_index: prefix_string}.
+
+    Prefix format: "c{label1}_c{label2}_" for depth-2, "c{label}_" for depth-1.
+    Noise images (label=-1) at any depth get prefix "" (unclustered).
+    """
+    n_samples = len(embeddings)
+    if n_samples == 0:
+        return {}
+
+    result: dict[int, str] = {}
+
+    # Stack entries: (list_of_indices, current_depth, label_path_so_far)
+    stack: list[tuple[list[int], int, list[int]]] = [(list(range(n_samples)), 0, [])]
+
+    while stack:
+        indices, depth, label_path = stack.pop()
+        sub_embeddings = embeddings[indices]
+
+        # Early stopping: skip if below min_cluster_size OR at max depth
+        if len(indices) < min_cluster_size or depth >= max_iterations:
+            prefix = _build_prefix(label_path)
+            for idx in indices:
+                result[idx] = prefix
+            continue
+
+        # Run clustering on sub-group
+        labels, _ = reduce_and_cluster(sub_embeddings, min_cluster_size=min_cluster_size)
+
+        # Group by cluster label
+        clusters: dict[int, list[int]] = {}
+        for i, label in enumerate(labels):
+            orig_idx = indices[i]
+            if label == -1:
+                # Noise images get empty prefix at any depth
+                result[orig_idx] = ""
+            else:
+                clusters.setdefault(label, []).append(orig_idx)
+
+        # Push child groups onto stack
+        for label, child_indices in clusters.items():
+            stack.append((child_indices, depth + 1, label_path + [label]))
+
+    return result
+
+
 def reduce_and_cluster(
     embeddings: np.ndarray,
     n_components: int = 20,

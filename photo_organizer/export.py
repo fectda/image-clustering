@@ -1,6 +1,7 @@
 """Export clustered images to folders."""
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -72,3 +73,57 @@ def export_clusters(
             output_dir,
         )
     return groups
+
+
+def flat_export(
+    image_paths: list[Path],
+    prefixes: dict[int, str],
+    output_dir: Path,
+    dry_run: bool = False,
+) -> int:
+    """Move files to flat dir with prefix prepended. Returns count of moved files.
+
+    Uses shutil.move with cross-device fallback (copy2 + remove).
+    Handles collisions by appending _N to stem.
+    Logs "Moved N files" on completion.
+    """
+    if dry_run:
+        log.info("=== DRY RUN — no files will be written ===")
+        for idx, src_path in enumerate(image_paths):
+            prefix = prefixes.get(idx, "")
+            dest_name = f"{prefix}{src_path.name}"
+            log.info("  would move %s → %s", src_path, output_dir / dest_name)
+        return 0
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Track used destination names for collision detection
+    used_names: dict[str, int] = {}
+    moved_count = 0
+
+    for idx, src_path in enumerate(image_paths):
+        prefix = prefixes.get(idx, "")
+        dest_name = f"{prefix}{src_path.name}"
+        dest = output_dir / dest_name
+
+        # Collision resolution: append _N to stem
+        if dest_name in used_names:
+            used_names[dest_name] += 1
+            stem = f"{prefix}{src_path.stem}"
+            suffix = src_path.suffix
+            dest = output_dir / f"{stem}_{used_names[dest_name]}{suffix}"
+        else:
+            used_names[dest_name] = 0
+
+        try:
+            shutil.move(str(src_path), str(dest))
+        except OSError:
+            # Cross-device link: fallback to copy + remove
+            shutil.copy2(str(src_path), str(dest))
+            os.remove(str(src_path))
+
+        moved_count += 1
+
+    log.info("Moved %d files", moved_count)
+    return moved_count

@@ -84,4 +84,10 @@ def parse_args(argv=None):
         default=True,
         help="Export unclustered (noise) images to unclustered/ folder (default: true)",
     )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3,
+        help="Maximum recursive clustering depth (default: 3)",
+    )
     return parser.parse_args(argv)
