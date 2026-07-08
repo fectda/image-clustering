@@ -1,4 +1,4 @@
-"""UMAP dimensionality reduction + K-Means clustering."""
+"""UMAP dimensionality reduction + HDBSCAN clustering."""
 
 import logging
 
@@ -9,53 +9,102 @@ log = logging.getLogger("cluster")
 
 def reduce_and_cluster(
     embeddings: np.ndarray,
-    n_components: int = 5,
-    max_k: int = 20,
-) -> np.ndarray:
-    """Reduce dims with UMAP, then cluster with K-Means (silhouette-optimized K)."""
-    log.info("Reducing to %d dims with UMAP ...", n_components)
+    n_components: int = 20,
+    n_neighbors: int = 40,
+    min_dist: float = 0.0,
+    metric: str = "cosine",
+    min_cluster_size: int = 15,
+    min_samples: int = 5,
+) -> tuple[np.ndarray, dict]:
+    """Reduce dims with UMAP, then cluster with HDBSCAN.
 
+    Returns (labels, metrics_dict) where metrics = {dbcv, n_clusters, n_outliers}.
+    """
+    import hdbscan
     import umap
+
+    n_samples = len(embeddings)
+
+    # UMAP dimensionality reduction
+    effective_neighbors = min_neighbors(n_neighbors, n_samples)
+    log.info(
+        "Reducing to %d dims with UMAP (neighbors=%d, dist=%.2f, metric=%s) ...",
+        n_components,
+        effective_neighbors,
+        min_dist,
+        metric,
+    )
 
     reducer = umap.UMAP(
         n_components=n_components,
+        n_neighbors=effective_neighbors,
+        min_dist=min_dist,
+        metric=metric,
         random_state=42,
-        n_neighbors=min(15, len(embeddings) - 1),
-        min_dist=0.1,
     )
     reduced = reducer.fit_transform(embeddings)
     log.info("UMAP reduced shape: %s", reduced.shape)
 
-    # Auto-detect K via silhouette score
-    from sklearn.cluster import KMeans
-    from sklearn.metrics import silhouette_score
-
-    n_samples = len(reduced)
-    max_k = min(max_k, n_samples - 1)
-
-    best_score = -1
-    best_k = min(5, max_k)  # default fallback
-    best_labels = None
-
-    for k in range(2, max_k + 1):
-        km = KMeans(n_clusters=k, random_state=42, n_init="auto")
-        labels = km.fit_predict(reduced)
-        if len(set(labels)) > 1:
-            score = silhouette_score(reduced, labels)
-            if score > best_score:
-                best_score = score
-                best_k = k
-                best_labels = labels
-
-    if best_labels is None:
-        # Edge case: fallback to 2 clusters
-        km = KMeans(n_clusters=2, random_state=42, n_init="auto")
-        best_labels = km.fit_predict(reduced)
-
+    # HDBSCAN clustering
     log.info(
-        "K-Means: k=%d (silhouette=%.3f), %d clusters",
-        best_k,
-        best_score if best_score > 0 else 0,
-        len(set(best_labels)),
+        "Clustering with HDBSCAN (min_cluster_size=%d, min_samples=%d) ...",
+        min_cluster_size,
+        min_samples,
     )
-    return best_labels
+
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        cluster_selection_method="eom",
+        metric="euclidean",
+    )
+    labels = clusterer.fit_predict(reduced)
+
+    # Compute metrics
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_outliers = int(np.sum(labels == -1))
+
+    # DBCV score
+    if n_clusters < 2 or n_outliers == n_samples:
+        # All noise or single cluster — DBCV undefined
+        dbcv_score = 0.0
+        if n_outliers == n_samples:
+            log.warning(
+                "All %d images classified as noise. "
+                "Consider lowering --min-cluster-size (currently %d).",
+                n_samples,
+                min_cluster_size,
+            )
+    else:
+        from hdbscan.validity import validity_index
+
+        dbcv_score = float(validity_index(reduced, labels))
+
+    metrics = {
+        "dbcv": dbcv_score,
+        "n_clusters": n_clusters,
+        "n_outliers": n_outliers,
+    }
+
+    # Log results
+    log.info(
+        "Clustering complete: %d clusters, %d outliers, DBCV=%.3f",
+        n_clusters,
+        n_outliers,
+        dbcv_score,
+    )
+
+    # Log cluster size distribution
+    unique_labels, counts = np.unique(labels, return_counts=True)
+    for label, count in zip(unique_labels, counts, strict=False):
+        if label == -1:
+            log.info("  noise: %d images", count)
+        else:
+            log.info("  cluster_%d: %d images", label, count)
+
+    return labels, metrics
+
+
+def min_neighbors(requested: int, n_samples: int) -> int:
+    """Ensure n_neighbors < n_samples and at least 2."""
+    return max(2, min(requested, max(n_samples - 1, 2)))

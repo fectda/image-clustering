@@ -56,14 +56,26 @@ def _load_siglip(device: str):
 
 
 def _load_qwen3(device: str):
-    """Load Qwen3-VL-Embedding-2B via HuggingFace transformers."""
-    from transformers import AutoImageProcessor, AutoModel
+    """Load Qwen3-VL-Embedding-2B via HuggingFace transformers.
+
+    Tries AutoImageProcessor first; falls back to AutoProcessor if unavailable.
+    """
+    from transformers import AutoModel
 
     hf_name = "Qwen/Qwen3-VL-Embedding-2B"
     log.info("Loading Qwen3 model: %s ...", hf_name)
     t0 = time.time()
 
-    processor = AutoImageProcessor.from_pretrained(hf_name)
+    # Try AutoImageProcessor first, fall back to AutoProcessor
+    try:
+        from transformers import AutoImageProcessor
+
+        processor = AutoImageProcessor.from_pretrained(hf_name)
+    except (ImportError, OSError):
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(hf_name)
+
     model = AutoModel.from_pretrained(hf_name).to(device)
     model.eval()
 

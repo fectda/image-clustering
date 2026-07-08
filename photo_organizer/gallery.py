@@ -16,8 +16,12 @@ def generate_gallery(output_dir: Path, groups: dict[int, list[tuple[int, Path]]]
     clusters = []
     for label in sorted(groups):
         items = groups[label]
-        cluster_name = f"cluster_{label}"
-        title = f"Cluster {label} ({len(items)} images)"
+        if label == -1:
+            cluster_name = "unclustered"
+            title = f"Unclustered ({len(items)} images)"
+        else:
+            cluster_name = f"cluster_{label}"
+            title = f"Cluster {label} ({len(items)} images)"
 
         thumbnails = []
         for idx, src_path in items:

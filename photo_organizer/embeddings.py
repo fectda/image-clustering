@@ -11,6 +11,117 @@ from tqdm import tqdm
 log = logging.getLogger("cluster")
 
 
+def _extract_single_backend(
+    model,
+    processor,
+    backend: str,
+    image_paths: list[Path],
+    device: str,
+    batch_size: int,
+) -> np.ndarray:
+    """Extract embeddings from a single backend. Returns (N, D) L2-normalized array."""
+    import torch
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i in tqdm(range(0, len(image_paths), batch_size), desc=f"Embedding ({backend})"):
+            batch_paths = image_paths[i : i + batch_size]
+            images = []
+
+            for img_path in batch_paths:
+                try:
+                    img = Image.open(img_path).convert("RGB")
+                    images.append(img)
+                except Exception as exc:
+                    log.warning("Skipping corrupt image: %s (%s)", img_path, exc)
+
+            if not images:
+                continue
+
+            if backend == "clip":
+                batch_input = torch.stack([processor(img) for img in images]).to(device)
+                features = model.encode_image(batch_input)
+            elif backend in ("dinov2", "siglip"):
+                inputs = processor(images=images, return_tensors="pt").to(device)
+                outputs = model(**inputs)
+                if backend == "siglip":
+                    features = outputs.pooler_output
+                else:
+                    features = outputs.last_hidden_state[:, 0, :]
+            elif backend == "qwen3":
+                inputs = processor(images=images, return_tensors="pt").to(device)
+                outputs = model(**inputs)
+                # Qwen3-VL-Embedding-2B: use the pooled embedding
+                features = outputs.pooler_output
+            else:
+                raise ValueError(f"Unknown backend: {backend}")
+
+            features = features / features.norm(dim=-1, keepdim=True)
+            all_embeddings.append(features.cpu().numpy())
+
+    if not all_embeddings:
+        return np.array([])
+
+    return np.concatenate(all_embeddings, axis=0)
+
+
+def extract_hybrid_embeddings(
+    models: dict,
+    image_paths: list[Path],
+    device: str,
+    batch_size: int = 32,
+) -> np.ndarray:
+    """Extract hybrid embeddings: DINOv2 (1024d) + Qwen3 (4096d) → (N, 5120).
+
+    Each sub-model's output is L2-normalized independently before concatenation.
+    The combined embedding is L2-normalized after concatenation.
+    """
+    log.info(
+        "Extracting hybrid embeddings for %d images (DINOv2 + Qwen3) ...",
+        len(image_paths),
+    )
+
+    # Extract DINOv2 embeddings (1024d)
+    dinov2_model, dinov2_proc = models["dinov2"]
+    dinov2_emb = _extract_single_backend(
+        dinov2_model, dinov2_proc, "dinov2", image_paths, device, batch_size
+    )
+    if dinov2_emb.size == 0:
+        log.error("No valid images for DINOv2 embedding.")
+        sys.exit(1)
+    log.info("DINOv2 embeddings: %s", dinov2_emb.shape)
+
+    # Extract Qwen3 embeddings (4096d) — may need smaller batch size
+    qwen3_batch = min(batch_size, 16)
+    qwen3_model, qwen3_proc = models["qwen3"]
+    qwen3_emb = _extract_single_backend(
+        qwen3_model, qwen3_proc, "qwen3", image_paths, device, qwen3_batch
+    )
+    if qwen3_emb.size == 0:
+        log.error("No valid images for Qwen3 embedding.")
+        sys.exit(1)
+    log.info("Qwen3 embeddings: %s", qwen3_emb.shape)
+
+    # Verify image count matches
+    if dinov2_emb.shape[0] != qwen3_emb.shape[0]:
+        log.error(
+            "Image count mismatch: DINOv2=%d, Qwen3=%d",
+            dinov2_emb.shape[0],
+            qwen3_emb.shape[0],
+        )
+        sys.exit(1)
+
+    # Concatenate → L2-normalize
+    combined = np.concatenate([dinov2_emb, qwen3_emb], axis=1)
+    norms = np.linalg.norm(combined, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-12, None)
+    combined = combined / norms
+
+    log.info("Hybrid embedding shape: %s", combined.shape)
+    return combined
+
+
 def extract_embeddings(
     model,
     processor,
@@ -20,57 +131,17 @@ def extract_embeddings(
     batch_size: int = 32,
 ) -> np.ndarray:
     """Extract L2-normalized embeddings for all images. Returns (N, D) array."""
-    import torch
-
     log.info(
         "Extracting embeddings for %d images (backend=%s) ...",
         len(image_paths),
         backend,
     )
-    all_embeddings = []
 
-    with torch.no_grad():
-        for i in tqdm(range(0, len(image_paths), batch_size), desc="Embedding"):
-            batch_paths = image_paths[i : i + batch_size]
-            images = []
-            valid_indices = []
+    embeddings = _extract_single_backend(model, processor, backend, image_paths, device, batch_size)
 
-            for idx, img_path in enumerate(batch_paths):
-                try:
-                    img = Image.open(img_path).convert("RGB")
-                    images.append(img)
-                    valid_indices.append(idx)
-                except Exception as exc:
-                    log.warning("Skipping corrupt image: %s (%s)", img_path, exc)
-
-            if not images:
-                continue
-
-            if backend == "clip":
-                # CLIP uses its own preprocess pipeline
-                batch_input = torch.stack([processor(img) for img in images]).to(device)
-                features = model.encode_image(batch_input)
-            elif backend in ("dinov2", "siglip"):
-                # HF transformers: processor returns a dict
-                inputs = processor(images=images, return_tensors="pt").to(device)
-                outputs = model(**inputs)
-                # Use CLS token (first token) for classification/embedding
-                if backend == "siglip":
-                    # SigLIP: mean pool the vision tokens
-                    features = outputs.pooler_output
-                else:
-                    # DINOv2: use CLS token
-                    features = outputs.last_hidden_state[:, 0, :]
-            else:
-                raise ValueError(f"Unknown backend: {backend}")
-
-            features = features / features.norm(dim=-1, keepdim=True)
-            all_embeddings.append(features.cpu().numpy())
-
-    if not all_embeddings:
+    if embeddings.size == 0:
         log.error("No valid images could be processed.")
         sys.exit(1)
 
-    embeddings = np.concatenate(all_embeddings, axis=0)
     log.info("Embedding shape: %s", embeddings.shape)
     return embeddings
