@@ -12,6 +12,9 @@ set -euo pipefail
 #   --output, -o      Output directory (required)
 #   --preview         Process 10 random photos only
 #   --dry-run         Report without writing
+#   --no-gallery      Skip HTML gallery generation
+#   --no-recursive-search  Only scan root of input directory
+#   --output-mode [flat|folders]  Output structure (default: flat)
 #   --no-faces        Skip face detection (placeholder)
 #   --model           Vision model: dinov2-large (default), dinov2-base, clip, siglip, hybrid
 #   --umap-components N  UMAP target dimensions (default: 20)
@@ -222,9 +225,11 @@ if [[ -f "$GALLERY" ]]; then
     echo ""
     info "✅ Done! Gallery: file://$GALLERY"
 else
-    # Check if --dry-run was used — no gallery in that case
+    # Check if --dry-run or --no-gallery was used — no gallery in those cases
     if [[ " ${DOCKER_ARGS[*]} " == *" --dry-run "* ]] || [[ " ${DOCKER_ARGS[*]} " == *" --dry-run" ]]; then
         info "✅ Dry run complete. No files were written."
+    elif [[ " ${DOCKER_ARGS[*]} " == *" --no-gallery "* ]] || [[ " ${DOCKER_ARGS[*]} " == *" --no-gallery" ]]; then
+        info "✅ Done! (gallery skipped)"
     else
         warn "Gallery not found at $GALLERY — check container output above for errors."
     fi
