@@ -88,35 +88,44 @@ done
 [[ -n "$INPUT_DIR" ]]  || die "--input is required"
 [[ -n "$OUTPUT_DIR" ]] || die "--output is required"
 
-# ── SMB/CIFS mount handling ──
-SMB_INPUT_MOUNT_DIR=""
-SMB_OUTPUT_MOUNT_DIR=""
+# ── SMB/CIFS mount handling (Docker Volumes) ──
+SMB_VOLUMES=()
+DOCKER_MOUNTS=()
+CONTAINER_INPUT_DIR="/data/input"
+CONTAINER_OUTPUT_DIR="/data/output"
 
 cleanup_smb_mounts() {
-    local dir
-    for dir in "$SMB_INPUT_MOUNT_DIR" "$SMB_OUTPUT_MOUNT_DIR"; do
-        [[ -z "$dir" ]] && continue
-        info "Unmounting SMB share: $dir"
-        sudo umount "$dir" 2>/dev/null || true
-        rmdir "$dir" 2>/dev/null || true
+    local vol
+    for vol in "${SMB_VOLUMES[@]:-}"; do
+        [[ -z "$vol" ]] && continue
+        info "Removing SMB Docker volume: $vol"
+        docker volume rm "$vol" >/dev/null 2>&1 || true
     done
 }
 trap cleanup_smb_mounts EXIT
 
-# Shared SMB mounter: _mount_smb <label> <uri> <outvar>
-#   label   — "input" or "output" (for mount dir naming and messages)
-#   uri     — smb://... URI
-#   outvar  — name of global variable to receive the mount path
+# Shared SMB mounter: _mount_smb <label> <uri> <out_subpath_var> <out_vol_var>
 _mount_smb() {
-    local label="$1" uri="$2" outvar="$3"
-    local unc_path decoded_path smb_port port_opts smb_opts mount_dir
+    local label="$1" uri="$2" out_subpath_var="$3" out_vol_var="$4"
+    local unc_path decoded_path smb_port port_opts smb_opts
+    local share subpath vol_name
 
     unc_path="//${uri#smb://}"
     decoded_path=$(python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1]))" "$unc_path" 2>/dev/null || echo "$unc_path")
 
+    if [[ "$decoded_path" =~ ^(//[^/]+/[^/]+)(/.*)?$ ]]; then
+        share="${BASH_REMATCH[1]}"
+        subpath="${BASH_REMATCH[2]:1}" # remove leading slash
+    else
+        die "Invalid SMB URI format (must include server and share): $decoded_path"
+    fi
+
     smb_port=""; port_opts=""
-    if [[ "$decoded_path" =~ ^//[^/]+:([0-9]+) ]]; then
-        smb_port="${BASH_REMATCH[1]}"
+    if [[ "$share" =~ ^//([^:]+):([0-9]+)(/.*) ]]; then
+        local server="${BASH_REMATCH[1]}"
+        smb_port="${BASH_REMATCH[2]}"
+        local share_name="${BASH_REMATCH[3]}"
+        share="//${server}${share_name}"
         port_opts=",port=$smb_port"
     fi
 
@@ -127,33 +136,46 @@ _mount_smb() {
         smb_opts="guest,uid=$(id -u),gid=$(id -g)$port_opts"
     fi
 
-    if ! command -v mount.cifs &>/dev/null; then
-        die "mount.cifs not found. Install cifs-utils: sudo apt install cifs-utils"
+    vol_name="photo_smb_${label}_$$_${RANDOM}"
+    info "Creating Docker volume for SMB share: $share"
+    
+    if ! docker volume create --driver local --opt type=cifs --opt device="$share" --opt o="$smb_opts" "$vol_name" >/dev/null; then
+        die "Failed to create Docker volume for $share (Check credentials and network)"
     fi
 
-    mount_dir=$(mktemp -d "/tmp/photo_smb_${label}_XXXXXX")
-    sudo mount -t cifs "$decoded_path" "$mount_dir" -o "$smb_opts" \
-        || die "Failed to mount SMB $label share: $decoded_path"
+    SMB_VOLUMES+=("$vol_name")
 
-    printf -v "$outvar" "%s" "$mount_dir"
-    info "Mounted $decoded_path → $mount_dir"
+    if [[ "$label" == "output" && -n "$subpath" ]]; then
+        info "Ensuring output subdirectory exists..."
+        # Use a lightweight container to create the directory inside the share
+        docker run --rm -v "$vol_name:/mnt" alpine mkdir -p "/mnt/$subpath" 2>/dev/null || true
+    fi
+
+    printf -v "$out_subpath_var" "%s" "$subpath"
+    printf -v "$out_vol_var" "%s" "$vol_name"
 }
 
 if [[ "$INPUT_DIR" == smb://* ]]; then
-    _mount_smb "input" "$INPUT_DIR" "SMB_INPUT_MOUNT_DIR"
-    INPUT_DIR="$SMB_INPUT_MOUNT_DIR"
+    _mount_smb "input" "$INPUT_DIR" "SMB_IN_SUB" "SMB_IN_VOL"
+    DOCKER_MOUNTS+=("-v" "$SMB_IN_VOL:/data/input_share")
+    CONTAINER_INPUT_DIR="/data/input_share/$SMB_IN_SUB"
+else
+    INPUT_DIR="$(realpath "$INPUT_DIR")"
+    [[ -d "$INPUT_DIR" ]] || die "Input directory does not exist: $INPUT_DIR"
+    DOCKER_MOUNTS+=("-v" "$INPUT_DIR:/data/input")
+    CONTAINER_INPUT_DIR="/data/input"
 fi
 
 if [[ "$OUTPUT_DIR" == smb://* ]]; then
-    _mount_smb "output" "$OUTPUT_DIR" "SMB_OUTPUT_MOUNT_DIR"
-    OUTPUT_DIR="$SMB_OUTPUT_MOUNT_DIR"
+    _mount_smb "output" "$OUTPUT_DIR" "SMB_OUT_SUB" "SMB_OUT_VOL"
+    DOCKER_MOUNTS+=("-v" "$SMB_OUT_VOL:/data/output_share")
+    CONTAINER_OUTPUT_DIR="/data/output_share/$SMB_OUT_SUB"
+else
+    OUTPUT_DIR="$(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
+    mkdir -p "$OUTPUT_DIR" || die "Cannot create output directory: $OUTPUT_DIR"
+    DOCKER_MOUNTS+=("-v" "$OUTPUT_DIR:/data/output")
+    CONTAINER_OUTPUT_DIR="/data/output"
 fi
-
-INPUT_DIR="$(realpath "$INPUT_DIR")"
-OUTPUT_DIR="$(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
-
-[[ -d "$INPUT_DIR" ]] || die "Input directory does not exist: $INPUT_DIR"
-mkdir -p "$OUTPUT_DIR" || die "Cannot create output directory: $OUTPUT_DIR"
 
 # ── GPU requirement (MANDATORY) ──
 GPU_FLAGS=""
@@ -219,10 +241,9 @@ docker run --rm \
     $GPU_FLAGS \
     -e "HOST_UID=$(id -u)" \
     -e "HOST_GID=$(id -g)" \
-    -v "$INPUT_DIR:/data/input" \
-    -v "$OUTPUT_DIR:/data/output" \
+    "${DOCKER_MOUNTS[@]}" \
     "$IMAGE_NAME" \
-    --input /data/input --output /data/output \
+    --input "$CONTAINER_INPUT_DIR" --output "$CONTAINER_OUTPUT_DIR" \
     "${DOCKER_ARGS[@]}"
 set +x
 
