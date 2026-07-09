@@ -105,7 +105,12 @@ class TestOrganizePhotos:
             mock_embeddings,
             mock_images,
             max_iterations=3,
-            min_cluster_size=15,
+            min_cluster_size=3,
+            min_samples=1,
+            umap_n_components=20,
+            umap_n_neighbors=40,
+            umap_min_dist=0.0,
+            umap_metric="cosine",
         )
 
     def test_organize_photos_dry_run_skips_moves(self):

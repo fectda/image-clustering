@@ -3,6 +3,14 @@
 import argparse
 
 
+def positive_int(v: str) -> int:
+    """Convert to int and validate >= 1."""
+    iv = int(v)
+    if iv < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {iv}")
+    return iv
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Cluster photos by visual similarity using vision embeddings + UMAP + clustering",
@@ -63,26 +71,26 @@ def parse_args(argv=None):
     parser.add_argument(
         "--min-cluster-size",
         type=int,
-        default=15,
-        help="HDBSCAN minimum cluster size (default: 15)",
+        default=3,
+        help="HDBSCAN minimum cluster size (default: 3)",
     )
     parser.add_argument(
         "--min-samples",
-        type=int,
-        default=5,
-        help="HDBSCAN minimum samples (default: 5)",
+        type=positive_int,
+        default=1,
+        help="HDBSCAN minimum samples (default: 1)",
+    )
+    parser.add_argument(
+        "--clip-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable CLIP zero-shot fallback for noise images (default: true)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=32,
         help="Batch size for embedding extraction (default: 32)",
-    )
-    parser.add_argument(
-        "--export-unclustered",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Export unclustered (noise) images to unclustered/ folder (default: true)",
     )
     parser.add_argument(
         "--max-iterations",

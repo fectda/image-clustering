@@ -1,10 +1,31 @@
 """UMAP dimensionality reduction + HDBSCAN clustering."""
 
 import logging
+from pathlib import Path
 
 import numpy as np
 
 log = logging.getLogger("cluster")
+
+CLIP_CATEGORIES = [
+    "A document, form, or receipt",
+    "A screenshot of an app or screen",
+    "A landscape or nature photo",
+    "A photo of people or friends",
+    "A photo of an animal or pet",
+    "A photo of food or meal",
+    "A photo of a vehicle or car",
+]
+
+CATEGORY_NAMES = [
+    "document",
+    "screenshot",
+    "landscape",
+    "people",
+    "pet",
+    "food",
+    "vehicle",
+]
 
 
 def _build_prefix(label_path: list[int]) -> str:
@@ -23,6 +44,11 @@ def recursive_cluster(
     _image_paths: list | None = None,
     max_iterations: int = 3,
     min_cluster_size: int = 3,
+    min_samples: int = 1,
+    umap_n_components: int = 20,
+    umap_n_neighbors: int = 40,
+    umap_min_dist: float = 0.0,
+    umap_metric: str = "cosine",
 ) -> dict[int, str]:
     """Stack-based recursive clustering. Returns {image_index: prefix_string}.
 
@@ -50,7 +76,15 @@ def recursive_cluster(
             continue
 
         # Run clustering on sub-group
-        labels, _ = reduce_and_cluster(sub_embeddings, min_cluster_size=min_cluster_size)
+        labels, _ = reduce_and_cluster(
+            sub_embeddings,
+            n_components=umap_n_components,
+            n_neighbors=umap_n_neighbors,
+            min_dist=umap_min_dist,
+            metric=umap_metric,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+        )
 
         # Group by cluster label
         clusters: dict[int, list[int]] = {}
@@ -87,8 +121,8 @@ def reduce_and_cluster(
 
     n_samples = len(embeddings)
 
-    # Early exit: need at least 2 samples for UMAP + HDBSCAN
-    if n_samples < 2:
+    # Early exit: need at least 3 samples for UMAP (n_neighbors < n_samples strict)
+    if n_samples < 3:
         log.warning("Only %d sample(s) — skipping clustering, all labeled as noise", n_samples)
         labels = np.full(n_samples, -1, dtype=int)
         metrics = {
@@ -195,3 +229,110 @@ def min_neighbors(requested: int, n_samples: int) -> int:
     if n_samples < 2:
         return 1
     return max(2, min(requested, n_samples - 1))
+
+
+def classify_noise_with_clip(
+    image_paths: list[Path],
+    prefixes: dict[int, str],
+    device: str = "cpu",
+) -> None:
+    """Classify noise images (empty prefix) using CLIP zero-shot.
+
+    Modifies prefixes dict in-place, updating noise-image entries to
+    "c_misc_[category]_" prefixes.
+
+    Parameters
+    ----------
+    image_paths : list[Path]
+        All image paths (same order as prefixes keys).
+    prefixes : dict[int, str]
+        Current prefix map from recursive_cluster(). Modified in-place.
+    device : str
+        Device for CLIP inference.
+
+    Side Effects
+    ------------
+    - Loads CLIP model via transformers (lazy import)
+    - Logs classification results
+    - Frees model after classification
+    """
+    # Collect noise image indices (empty prefix)
+    noise_indices = [idx for idx, prefix in prefixes.items() if prefix == ""]
+    if not noise_indices:
+        log.info("No noise images to classify with CLIP — skipping.")
+        return None
+
+    log.info("Classifying %d noise images with CLIP zero-shot ...", len(noise_indices))
+
+    try:
+        import torch
+        from PIL import Image
+        from transformers import CLIPModel, CLIPProcessor
+    except ImportError:
+        log.warning(
+            "Required dependencies (torch, transformers, Pillow) not available for CLIP fallback"
+        )
+        return None
+
+    try:
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    except Exception as exc:
+        log.warning("Failed to load CLIP model (%s) — skipping CLIP fallback.", exc)
+        return None
+
+    model = model.to(device)
+    model.eval()
+
+    # Filter to only noise image paths
+    noise_paths = [image_paths[idx] for idx in noise_indices]
+
+    # Load and preprocess images
+    pil_images = []
+    valid_indices = []
+    for i, path in enumerate(noise_paths):
+        try:
+            img = Image.open(path).convert("RGB")
+            pil_images.append(img)
+            valid_indices.append(noise_indices[i])
+        except Exception as exc:
+            log.warning("Skipping corrupt image: %s (%s)", path, exc)
+
+    if not pil_images:
+        log.warning("No valid noise images to classify.")
+        return None
+
+    # Encode images and text prompts
+    with torch.no_grad():
+        image_inputs = processor(images=pil_images, return_tensors="pt", padding=True).to(device)
+        text_inputs = processor(text=CLIP_CATEGORIES, return_tensors="pt", padding=True).to(device)
+
+        image_embeds = model.get_image_features(**image_inputs)
+        text_embeds = model.get_text_features(**text_inputs)
+
+        # L2-normalize
+        image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
+        text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
+
+        # Cosine similarity → argmax
+        similarity = (image_embeds @ text_embeds.T).softmax(dim=-1)
+        best_category_idx = similarity.argmax(dim=-1)
+
+    # Update prefixes in-place
+    for i, category_idx in enumerate(best_category_idx):
+        idx = valid_indices[i]
+        category_name = CATEGORY_NAMES[category_idx.item()]
+        prefixes[idx] = f"c_misc_{category_name}_"
+
+    # Free model
+    del model
+    del processor
+    if "cuda" in device and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    log.info(
+        "CLIP classification complete: %d images classified.",
+        len(valid_indices),
+    )
+
+    return None

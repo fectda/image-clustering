@@ -1,10 +1,17 @@
 """Unit tests for cluster.py — UMAP + HDBSCAN + DBCV."""
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import torch
+
+
+@pytest.fixture(scope="session", autouse=True)
+def set_seeds():
+    np.random.seed(42)
+    torch.manual_seed(42)
 
 
 class TestMinNeighbors:
@@ -221,6 +228,255 @@ class TestCliMaxIterations:
         assert args.max_iterations == 5
 
 
+class TestCLIClipFallbackArgs:
+    """CLI args: new defaults and --clip-fallback flag."""
+
+    def test_default_min_cluster_size(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out"])
+        assert args.min_cluster_size == 3
+
+    def test_default_min_samples(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out"])
+        assert args.min_samples == 1
+
+    def test_default_clip_fallback_enabled(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out"])
+        assert args.clip_fallback is True
+
+    def test_no_clip_fallback_flag(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out", "--no-clip-fallback"])
+        assert args.clip_fallback is False
+
+    def test_custom_min_cluster_size(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out", "--min-cluster-size", "10"])
+        assert args.min_cluster_size == 10
+
+    def test_custom_min_samples(self):
+        from photo_organizer.cli import parse_args
+
+        args = parse_args(["-i", "/tmp", "-o", "/tmp/out", "--min-samples", "5"])
+        assert args.min_samples == 5
+
+
+@pytest.fixture()
+def mock_clip_deps():
+    """Inject mock transformers CLIPModel/CLIPProcessor via sys.modules.
+
+    Does NOT mock torch — CLIP classification needs real tensor operations.
+    """
+    mock_clip_model = MagicMock()
+    mock_clip_processor = MagicMock()
+    mock_transformers = MagicMock()
+    mock_transformers.CLIPModel = mock_clip_model
+    mock_transformers.CLIPProcessor = mock_clip_processor
+
+    saved = {}
+    for key in ("transformers",):
+        saved[key] = sys.modules.get(key)
+
+    sys.modules["transformers"] = mock_transformers
+
+    yield mock_clip_model, mock_clip_processor, mock_transformers
+
+    for key, original in saved.items():
+        if original is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = original
+
+
+class TestClassifyNoiseWithClip:
+    """classify_noise_with_clip() — CLIP zero-shot classification of noise images."""
+
+    def _create_test_images(self, tmp_path, n):
+        """Create n small test JPEG images in tmp_path."""
+        from PIL import Image
+
+        paths = []
+        for i in range(n):
+            img = Image.new("RGB", (64, 64), color=(i * 30, i * 20, i * 10))
+            p = tmp_path / f"img_{i}.jpg"
+            img.save(p)
+            paths.append(p)
+        return paths
+
+    def _setup_clip_mocks(self, mock_clip_deps, n_images):
+        """Set up CLIP mocks with proper tensor returns for classification."""
+        import torch
+
+        mock_clip_model_cls, mock_clip_processor_cls, _ = mock_clip_deps
+
+        # Mock CLIPModel
+        mock_model = MagicMock()
+        mock_clip_model_cls.from_pretrained.return_value = mock_model
+        mock_model.to.return_value = mock_model
+
+        # Mock get_image_features → return tensor based on pixel_values batch size
+        def mock_get_image_features(**kwargs):
+            pv = kwargs.get("pixel_values")
+            batch = pv.shape[0] if pv is not None and hasattr(pv, "shape") else n_images
+            return torch.randn(batch, 512)
+
+        mock_model.get_image_features.side_effect = mock_get_image_features
+
+        # Mock get_text_features → real tensor (7, 512) for 7 CLIP categories
+        text_embeds = torch.randn(7, 512)
+        text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
+        mock_model.get_text_features.return_value = text_embeds
+
+        # Mock CLIPProcessor
+        mock_processor = MagicMock()
+        mock_clip_processor_cls.from_pretrained.return_value = mock_processor
+
+        # Processor returns dict-like object that supports **unpacking and .to()
+        # Differentiate image calls (has images kwarg) vs text calls (no images kwarg)
+        def mock_processor_call(*args, images=None, **kwargs):
+            class FakeEncoding(dict):
+                def to(self, dev):
+                    return self
+
+            if images is not None:
+                batch = len(images)
+                return FakeEncoding(
+                    pixel_values=torch.randn(batch, 3, 224, 224),
+                )
+            else:
+                return FakeEncoding(
+                    input_ids=torch.randint(0, 1000, (1, 77)),
+                )
+
+        mock_processor.side_effect = mock_processor_call
+
+        return mock_model, mock_processor
+
+    def test_normal_classification(self, mock_clip_deps, tmp_path):
+        """10 noise images → each gets c_misc_[category]_ prefix."""
+        from photo_organizer.cluster import CATEGORY_NAMES, classify_noise_with_clip
+
+        image_paths = self._create_test_images(tmp_path, 10)
+        prefixes = {i: "" for i in range(10)}
+
+        self._setup_clip_mocks(mock_clip_deps, 10)
+
+        classify_noise_with_clip(image_paths, prefixes, device="cpu")
+
+        # Each image should get a c_misc_[category]_ prefix
+        for i in range(10):
+            assert prefixes[i].startswith("c_misc_"), f"Image {i} prefix: {prefixes[i]}"
+            category_part = prefixes[i].replace("c_misc_", "").rstrip("_")
+            assert category_part in CATEGORY_NAMES, f"Unknown category: {category_part}"
+
+    def test_zero_noise_images(self, mock_clip_deps):
+        """Zero noise images → prefixes unchanged, no CLIP loaded."""
+        from pathlib import Path
+
+        from photo_organizer.cluster import classify_noise_with_clip
+
+        mock_clip_model_cls, _, _ = mock_clip_deps
+
+        # All images already have prefixes (no noise)
+        prefixes = {0: "c0_", 1: "c0_c1_", 2: "c1_"}
+        image_paths = [Path(f"/tmp/img_{i}.jpg") for i in range(3)]
+
+        classify_noise_with_clip(image_paths, prefixes, device="cpu")
+
+        # Prefixes unchanged
+        assert prefixes == {0: "c0_", 1: "c0_c1_", 2: "c1_"}
+        # CLIP model should NOT have been loaded
+        mock_clip_model_cls.from_pretrained.assert_not_called()
+
+    def test_model_load_failure(self, mock_clip_deps, caplog):
+        """CLIP model load failure (Exception) → graceful skip, prefixes unchanged, warning logged."""
+        from pathlib import Path
+
+        from photo_organizer.cluster import classify_noise_with_clip
+
+        mock_clip_model_cls, _, _ = mock_clip_deps
+
+        prefixes = {0: "", 1: ""}
+        image_paths = [Path("/tmp/img_0.jpg"), Path("/tmp/img_1.jpg")]
+
+        # Make from_pretrained raise Exception
+        mock_clip_model_cls.from_pretrained.side_effect = OSError("Model not found")
+
+        classify_noise_with_clip(image_paths, prefixes, device="cpu")
+
+        # Prefixes unchanged
+        assert prefixes == {0: "", 1: ""}
+        assert "Failed to load CLIP model" in caplog.text
+
+    def test_single_noise_image(self, mock_clip_deps, tmp_path):
+        """Single noise image → classified correctly."""
+        from photo_organizer.cluster import CATEGORY_NAMES, classify_noise_with_clip
+
+        image_paths = self._create_test_images(tmp_path, 1)
+        prefixes = {0: ""}
+
+        self._setup_clip_mocks(mock_clip_deps, 1)
+
+        classify_noise_with_clip(image_paths, prefixes, device="cpu")
+
+        assert prefixes[0].startswith("c_misc_")
+        category_part = prefixes[0].replace("c_misc_", "").rstrip("_")
+        assert category_part in CATEGORY_NAMES
+
+    def test_mixed_prefixes(self, mock_clip_deps, tmp_path):
+        """Some images noise, some clustered → only noise images get CLIP prefixes."""
+        from photo_organizer.cluster import classify_noise_with_clip
+
+        all_paths = self._create_test_images(tmp_path, 4)
+        prefixes = {0: "c0_", 1: "", 2: "c1_", 3: ""}
+
+        self._setup_clip_mocks(mock_clip_deps, 4)
+
+        classify_noise_with_clip(all_paths, prefixes, device="cpu")
+
+        # Clustered images unchanged
+        assert prefixes[0] == "c0_"
+        assert prefixes[2] == "c1_"
+        # Noise images got CLIP prefix
+        assert prefixes[1].startswith("c_misc_")
+        assert prefixes[3].startswith("c_misc_")
+
+    def test_corrupt_image_skipped(self, mock_clip_deps, tmp_path, caplog):
+        """Corrupt image (Image.open fails) → skipped, valid images still classified, warning logged."""
+        from photo_organizer.cluster import classify_noise_with_clip
+
+        # One valid image
+        from PIL import Image
+
+        valid_path = tmp_path / "valid.jpg"
+        Image.new("RGB", (64, 64)).save(valid_path)
+
+        # One corrupt image (no file written)
+        fake_path = tmp_path / "corrupt.jpg"
+
+        image_paths = [valid_path, fake_path]
+        prefixes = {0: "", 1: ""}
+
+        # Setup mocks for 1 valid image (the corrupt one is skipped)
+        self._setup_clip_mocks(mock_clip_deps, 1)
+
+        classify_noise_with_clip(image_paths, prefixes, device="cpu")
+
+        # Valid image got classified
+        assert prefixes[0].startswith("c_misc_")
+        # Corrupt image remained unchanged
+        assert prefixes[1] == ""
+        # Warning was logged
+        assert "Skipping corrupt image" in caplog.text
+
+
 class TestRecursiveCluster:
     """recursive_cluster() — stack-based iterative clustering."""
 
@@ -255,6 +511,10 @@ class TestRecursiveCluster:
         assert len(result) == 6
         for idx in range(6):
             assert result[idx] == "c0_"
+
+        # Verify min_samples is threaded through to HDBSCAN
+        call_kwargs = mock_hdbscan_mod.HDBSCAN.call_args[1]
+        assert call_kwargs["min_samples"] == 1
 
     def test_two_levels(self, mock_cluster_deps):
         """Parent cluster 0 → child cluster 1 → prefixes 'c0_c1_' for children."""
@@ -407,9 +667,9 @@ class TestRecursiveCluster:
 
         # Only 2 UMAP calls: depth 0 + depth 1 (no more after all-noise sub-group)
         assert call_count[0] == 2
-        # All images in cluster 0 at depth 1 are noise → empty prefix
+        # Depth 1 subgroup all-noise → each inherits parent prefix 'c0_' from label_path [0]
         for idx in range(6):
-            assert result[idx] == ""
+            assert result[idx] == "c0_"
         # Noise at depth 0 → empty prefix
         for idx in range(6, 10):
             assert result[idx] == ""
