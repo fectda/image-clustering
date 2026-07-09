@@ -2,7 +2,6 @@
 
 import logging
 import random
-import sys
 from pathlib import Path
 
 log = logging.getLogger("cluster")
@@ -10,15 +9,28 @@ log = logging.getLogger("cluster")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def scan_images(input_dir: str) -> list[Path]:
-    """Recursively scan input_dir for image files."""
+class ScanError(Exception):
+    """Raised when image scanning fails (directory missing or no images found)."""
+
+
+def scan_images(input_dir: str, recursive: bool = True) -> list[Path]:
+    """Scan input_dir for image files.
+
+    When recursive=True (default), scans all subdirectories.
+    When recursive=False, only scans the root directory.
+
+    Raises
+    ------
+    ScanError
+        If input_dir does not exist or no images are found.
+    """
     input_path = Path(input_dir)
     if not input_path.is_dir():
-        log.error("Input directory does not exist: %s", input_dir)
-        sys.exit(1)
+        raise ScanError(f"Input directory does not exist: {input_dir}")
 
     files = []
-    for p in input_path.rglob("*"):
+    glob_method = input_path.rglob if recursive else input_path.glob
+    for p in glob_method("*"):
         try:
             if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
                 files.append(p)
@@ -27,8 +39,7 @@ def scan_images(input_dir: str) -> list[Path]:
             continue
     files = sorted(files)
     if not files:
-        log.error("No images found (jpg/jpeg/png/webp) in: %s", input_dir)
-        sys.exit(1)
+        raise ScanError(f"No images found (jpg/jpeg/png/webp) in: {input_dir}")
     log.info("Found %d images", len(files))
     return files
 
