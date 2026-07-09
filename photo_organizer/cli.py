@@ -98,4 +98,23 @@ def parse_args(argv=None):
         default=3,
         help="Maximum recursive clustering depth (default: 3)",
     )
+    parser.add_argument(
+        "--no-gallery",
+        action="store_true",
+        dest="no_gallery",
+        help="Skip HTML gallery generation after export",
+    )
+    parser.add_argument(
+        "--no-recursive-search",
+        action="store_true",
+        dest="no_recursive_search",
+        help="Only scan root of input directory, ignore subdirectories",
+    )
+    parser.add_argument(
+        "--output-mode",
+        choices=["flat", "folders"],
+        default="flat",
+        dest="output_mode",
+        help="Output structure: flat (prefixed files) or folders (subdirectory hierarchy) (default: flat)",
+    )
     return parser.parse_args(argv)
