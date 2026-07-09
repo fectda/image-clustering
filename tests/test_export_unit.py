@@ -88,20 +88,27 @@ class TestFlatExport:
         """Second same-name file gets _1 suffix appended to stem."""
         from photo_organizer.export import flat_export
 
-        # Two files with the SAME name but different source paths
-        image_paths = [Path("/fake/dir/photo.jpg"), Path("/fake/other/photo.jpg")]
+        # Create real source files on disk so shutil.move can operate
+        first_src = tmp_path / "dir" / "photo.jpg"
+        first_src.parent.mkdir(parents=True, exist_ok=True)
+        first_src.write_bytes(b"fake_first")
+        second_src = tmp_path / "other" / "photo.jpg"
+        second_src.parent.mkdir(parents=True, exist_ok=True)
+        second_src.write_bytes(b"fake_second")
+
+        image_paths = [first_src, second_src]
         prefixes = {0: "c0_", 1: "c0_"}  # Same prefix, same filename → collision
 
-        with patch("photo_organizer.export.shutil.move") as mock_move:
-            count = flat_export(image_paths, prefixes, tmp_path, dry_run=False)
+        # Use real move (not mocked) so dest.exists() can detect collisions
+        count = flat_export(image_paths, prefixes, tmp_path, dry_run=False)
 
         assert count == 2
         # First file → c0_photo.jpg, second file → collision → c0_photo_1.jpg
-        calls = mock_move.call_args_list
-        first_dst = calls[0][0][1]
-        second_dst = calls[1][0][1]
-        assert first_dst == str(tmp_path / "c0_photo.jpg")
-        assert second_dst == str(tmp_path / "c0_photo_1.jpg")
+        assert (tmp_path / "c0_photo.jpg").exists()
+        assert (tmp_path / "c0_photo_1.jpg").exists()
+        # Originals moved
+        assert not first_src.exists()
+        assert not second_src.exists()
 
     def test_flat_export_dry_run(self, tmp_path):
         """shutil.move never called, returns 0."""

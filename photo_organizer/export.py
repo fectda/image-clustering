@@ -76,6 +76,71 @@ def export_clusters(
     return groups
 
 
+def folders_export(
+    image_paths: list[Path],
+    prefixes: dict[int, str],
+    output_dir: Path,
+    dry_run: bool = False,
+) -> int:
+    """Create prefix/dir hierarchy and place images with original names.
+
+    Prefix "c1_c2_" → output/c1/c2/IMG.jpg
+    Prefix "" → output/unclustered/IMG.jpg
+    Handles collisions by appending _N to stem.
+    Returns count of moved files.
+    """
+    if dry_run:
+        log.info("=== DRY RUN — no files will be written ===")
+        for idx, src_path in enumerate(image_paths):
+            prefix = prefixes.get(idx, "")
+            if prefix:
+                parts = [p for p in prefix.rstrip("_").split("_") if p]
+                dest_dir = output_dir / Path(*parts)
+            else:
+                dest_dir = output_dir / "unclustered"
+            log.info("  would move %s → %s", src_path, dest_dir / src_path.name)
+        return 0
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    failures: list[tuple[Path, Exception]] = []
+    moved_count = 0
+
+    for idx, src_path in enumerate(image_paths):
+        try:
+            prefix = prefixes.get(idx, "")
+            if prefix:
+                parts = [p for p in prefix.rstrip("_").split("_") if p]
+                dest_dir = output_dir / Path(*parts)
+            else:
+                dest_dir = output_dir / "unclustered"
+
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / src_path.name
+
+            # Collision resolution: check if dest exists on disk
+            if dest.exists():
+                dest = dest_dir / f"{src_path.stem}_{idx}{src_path.suffix}"
+
+            try:
+                shutil.move(str(src_path), str(dest))
+            except OSError:
+                # Cross-device link: fallback to verified copy + remove
+                _verified_copy(src_path, dest)
+                os.remove(str(src_path))
+
+            moved_count += 1
+        except Exception as exc:
+            log.error("Failed to process %s: %s", src_path, exc)
+            failures.append((src_path, exc))
+
+    log.info("Moved %d files to folder hierarchy", moved_count)
+    if failures:
+        log.warning("%d file(s) failed: %s", len(failures), ", ".join(str(p) for p, _ in failures))
+    return moved_count
+
+
 def _verified_copy(src: Path, dest: Path, retries: int = 2) -> None:
     """Copy src to dest with size verification and retry on transient errors.
 
@@ -120,32 +185,33 @@ def flat_export(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Track used destination names for collision detection
-    used_names: dict[str, int] = {}
+    failures: list[tuple[Path, Exception]] = []
     moved_count = 0
 
     for idx, src_path in enumerate(image_paths):
-        prefix = prefixes.get(idx, "")
-        dest_name = f"{prefix}{src_path.name}"
-        dest = output_dir / dest_name
-
-        # Collision resolution: append _N to stem
-        if dest_name in used_names:
-            used_names[dest_name] += 1
-            stem = f"{prefix}{src_path.stem}"
-            suffix = src_path.suffix
-            dest = output_dir / f"{stem}_{used_names[dest_name]}{suffix}"
-        else:
-            used_names[dest_name] = 0
-
         try:
-            shutil.move(str(src_path), str(dest))
-        except OSError:
-            # Cross-device link: fallback to verified copy + remove
-            _verified_copy(src_path, dest)
-            os.remove(str(src_path))
+            prefix = prefixes.get(idx, "")
+            dest_name = f"{prefix}{src_path.name}"
+            dest = output_dir / dest_name
 
-        moved_count += 1
+            # Collision resolution: check if dest exists on disk
+            if dest.exists():
+                stem = f"{prefix}{src_path.stem}"
+                dest = output_dir / f"{stem}_{idx}{src_path.suffix}"
+
+            try:
+                shutil.move(str(src_path), str(dest))
+            except OSError:
+                # Cross-device link: fallback to verified copy + remove
+                _verified_copy(src_path, dest)
+                os.remove(str(src_path))
+
+            moved_count += 1
+        except Exception as exc:
+            log.error("Failed to process %s: %s", src_path, exc)
+            failures.append((src_path, exc))
 
     log.info("Moved %d files", moved_count)
+    if failures:
+        log.warning("%d file(s) failed: %s", len(failures), ", ".join(str(p) for p, _ in failures))
     return moved_count
