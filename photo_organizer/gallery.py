@@ -63,16 +63,28 @@ def generate_gallery(output_dir: Path, groups: dict[int, list[tuple[int, Path]]]
 
 
 def generate_flat_gallery(output_dir: Path) -> None:
-    """Scan flat dir, group by regex ^(c\\d+_)+, render Jinja2 template.
+    """Scan output dir, group by prefix or subdirectory, render Jinja2 template.
 
-    Unclustered files (no prefix match) go to "Unclustered" section.
+    Handles both flat mode (files with ^(c\\d+_)+ prefix) and
+    folders mode (subdirectories containing images).
     """
     output_dir = Path(output_dir)
+
+    # Collect image files from flat dir and from subdirectories
     image_files = sorted(
         p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-    # Group files by prefix
+    # Also collect images from subdirectories (folders mode) — recursive walk
+    subdir_images: dict[str, list[tuple[str, str]]] = {}
+    for entry in sorted(output_dir.iterdir()):
+        if entry.is_dir() and not entry.name.startswith("."):
+            for img in sorted(entry.rglob("*")):
+                if img.is_file() and img.suffix.lower() in IMAGE_EXTENSIONS:
+                    rel_path = str(img.relative_to(output_dir))
+                    subdir_images.setdefault(entry.name, []).append((rel_path, img.name))
+
+    # Group flat files by prefix
     groups: dict[str, list[tuple[str, str]]] = {}
     for img_path in image_files:
         match = _FLAT_PREFIX_RE.match(img_path.name)
@@ -85,12 +97,19 @@ def generate_flat_gallery(output_dir: Path) -> None:
         img_name = img_path.name
         groups.setdefault(prefix, []).append((img_rel, img_name))
 
+    # Add subdirectory groups (folders mode)
+    for dir_name, items in subdir_images.items():
+        groups.setdefault(dir_name + "/", []).extend(items)
+
     # Build clusters for template
     clusters = []
     for prefix, items in sorted(groups.items(), key=lambda x: -len(x[1])):
         if prefix == "Unclustered":
             cluster_name = "unclustered"
             title = f"Unclustered ({len(items)} images)"
+        elif prefix.endswith("/"):
+            cluster_name = prefix.rstrip("/")
+            title = f"{cluster_name} ({len(items)} images)"
         else:
             cluster_name = f"cluster_{prefix.rstrip('_')}"
             title = f"{prefix.rstrip('_')} ({len(items)} images)"
