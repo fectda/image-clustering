@@ -7,10 +7,10 @@ from pathlib import Path
 from photo_organizer.cli import parse_args
 from photo_organizer.cluster import classify_noise_with_clip, recursive_cluster
 from photo_organizer.embeddings import extract_embeddings, extract_hybrid_embeddings
-from photo_organizer.export import flat_export
+from photo_organizer.export import flat_export, folders_export
 from photo_organizer.gallery import generate_flat_gallery
 from photo_organizer.models import load_model
-from photo_organizer.scanner import sample_preview, scan_images
+from photo_organizer.scanner import ScanError, sample_preview, scan_images
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,13 +35,16 @@ def organize_photos(
     umap_n_neighbors: int = 40,
     umap_min_dist: float = 0.0,
     umap_metric: str = "cosine",
+    recursive: bool = True,
+    no_gallery: bool = False,
+    output_mode: str = "flat",
 ) -> None:
     """Full pipeline: scan → embed → recursive_cluster → [clip_fallback] → export → gallery."""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
 
     # Phase 1: Scan
-    images = scan_images(input_dir)
+    images = scan_images(input_dir, recursive=recursive)
     if preview:
         images = sample_preview(images, n=10)
         log.info("Preview mode: %d random images", len(images))
@@ -97,15 +100,23 @@ def organize_photos(
 
     # Phase 5: Export
     if dry_run:
-        flat_export(images, prefixes, output_dir, dry_run=True)
+        if output_mode == "folders":
+            folders_export(images, prefixes, output_dir, dry_run=True)
+        else:
+            flat_export(images, prefixes, output_dir, dry_run=True)
         return
 
-    flat_export(images, prefixes, output_dir, dry_run=False)
+    if output_mode == "folders":
+        folders_export(images, prefixes, output_dir, dry_run=False)
+    else:
+        flat_export(images, prefixes, output_dir, dry_run=False)
 
     # Phase 6: Gallery
-    generate_flat_gallery(output_dir)
-
-    log.info("Done! Gallery: %s", output_dir / "index.html")
+    if not no_gallery:
+        generate_flat_gallery(output_dir)
+        log.info("Done! Gallery: %s", output_dir / "index.html")
+    else:
+        log.info("Done! (gallery skipped)")
 
 
 def main():
@@ -118,22 +129,29 @@ def main():
             "Use --min-cluster-size instead (default: 3)."
         )
 
-    organize_photos(
-        args.input,
-        args.output,
-        model=args.model,
-        batch_size=args.batch_size,
-        max_iterations=args.max_iterations,
-        min_cluster_size=args.min_cluster_size,
-        min_samples=args.min_samples,
-        clip_fallback=args.clip_fallback,
-        dry_run=args.dry_run,
-        preview=args.preview,
-        umap_n_components=args.umap_components,
-        umap_n_neighbors=args.umap_neighbors,
-        umap_min_dist=args.umap_min_dist,
-        umap_metric=args.umap_metric,
-    )
+    try:
+        organize_photos(
+            args.input,
+            args.output,
+            model=args.model,
+            batch_size=args.batch_size,
+            max_iterations=args.max_iterations,
+            min_cluster_size=args.min_cluster_size,
+            min_samples=args.min_samples,
+            clip_fallback=args.clip_fallback,
+            dry_run=args.dry_run,
+            preview=args.preview,
+            umap_n_components=args.umap_components,
+            umap_n_neighbors=args.umap_neighbors,
+            umap_min_dist=args.umap_min_dist,
+            umap_metric=args.umap_metric,
+            recursive=not args.no_recursive_search,
+            no_gallery=args.no_gallery,
+            output_mode=args.output_mode,
+        )
+    except ScanError as exc:
+        log.error(str(exc))
+        sys.exit(1)
 
 
 if __name__ == "__main__":
