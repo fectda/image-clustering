@@ -31,6 +31,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE_NAME="vision-photo-organizer:latest"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 
+# Cargar variables de entorno desde .env si existe
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
 # ── Colors for output ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
