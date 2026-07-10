@@ -69,8 +69,8 @@ def recursive_cluster(
 ) -> dict[int, str]:
     """Stack-based recursive clustering. Returns {image_index: prefix_string}.
 
-    In KMeans mode (default), clustering is single-pass flat — no recursion.
-    In HDBSCAN mode, clustering recurses on non-noise sub-clusters.
+    Both KMeans and HDBSCAN modes recurse via the same stack-based loop.
+    KMeans noise handling is a no-op (KMeans never returns label -1).
 
     Prefix format: "c{label1}_c{label2}_" for depth-2, "c{label}_" for depth-1.
     Noise images (label=-1) at any depth get prefix "" (unclustered).
@@ -81,29 +81,7 @@ def recursive_cluster(
 
     result: dict[int, str] = {}
 
-    # KMeans mode: single-pass flat clustering, no recursion
-    if cluster_algo == "kmeans":
-        log.info("KMeans mode: single-pass clustering (max_iterations=%d ignored)", max_iterations)
-        labels, _ = reduce_and_cluster(
-            embeddings,
-            n_components=umap_n_components,
-            n_neighbors=umap_n_neighbors,
-            min_dist=umap_min_dist,
-            metric=umap_metric,
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
-            algo="kmeans",
-            kmeans_k=kmeans_k,
-        )
-        for i, label in enumerate(labels):
-            if label == -1:
-                # Should not happen in KMeans mode (no noise concept), but be defensive
-                result[i] = ""
-            else:
-                result[i] = _build_prefix([label])
-        return result
-
-    # HDBSCAN mode: existing stack-based recursive clustering
+    # Stack-based recursive clustering
     # Stack entries: (list_of_indices, current_depth, label_path_so_far)
     stack: list[tuple[list[int], int, list[int]]] = [(list(range(n_samples)), 0, [])]
 
@@ -127,7 +105,8 @@ def recursive_cluster(
             metric=umap_metric,
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
-            algo="hdbscan",
+            algo=cluster_algo,
+            kmeans_k=kmeans_k,
         )
 
         # Group by cluster label
