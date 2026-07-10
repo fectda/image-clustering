@@ -111,6 +111,8 @@ class TestOrganizePhotos:
             umap_n_neighbors=40,
             umap_min_dist=0.0,
             umap_metric="cosine",
+            cluster_algo="kmeans",
+            kmeans_k=8,
         )
 
     def test_organize_photos_dry_run_skips_moves(self):

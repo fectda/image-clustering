@@ -1,4 +1,4 @@
-"""UMAP dimensionality reduction + HDBSCAN clustering."""
+"""UMAP dimensionality reduction + HDBSCAN / KMeans clustering."""
 
 import logging
 from pathlib import Path
@@ -39,9 +39,24 @@ def _build_prefix(label_path: list[int]) -> str:
     return "".join(f"c{label}_" for label in label_path)
 
 
+def _cluster_kmeans(
+    reduced: np.ndarray,
+    k: int = 8,
+    random_state: int = 42,
+) -> np.ndarray:
+    """Run KMeans on reduced embeddings. Returns flat labels array."""
+    from sklearn.cluster import KMeans
+
+    effective_k = min(k, max(2, len(reduced) - 1))
+    log.info("Clustering with KMeans (k=%d) ...", effective_k)
+    kmeans = KMeans(n_clusters=effective_k, random_state=random_state, n_init="auto")
+    labels = kmeans.fit_predict(reduced)
+    return labels.astype(int)
+
+
 def recursive_cluster(
     embeddings: np.ndarray,
-    _image_paths: list | None = None,
+    _image_paths: list[Path] | None = None,  # Reserved for future CLIP-fallback / noise-logging
     max_iterations: int = 3,
     min_cluster_size: int = 3,
     min_samples: int = 1,
@@ -49,8 +64,13 @@ def recursive_cluster(
     umap_n_neighbors: int = 40,
     umap_min_dist: float = 0.0,
     umap_metric: str = "cosine",
+    cluster_algo: str = "kmeans",
+    kmeans_k: int = 8,
 ) -> dict[int, str]:
     """Stack-based recursive clustering. Returns {image_index: prefix_string}.
+
+    In KMeans mode (default), clustering is single-pass flat — no recursion.
+    In HDBSCAN mode, clustering recurses on non-noise sub-clusters.
 
     Prefix format: "c{label1}_c{label2}_" for depth-2, "c{label}_" for depth-1.
     Noise images (label=-1) at any depth get prefix "" (unclustered).
@@ -61,6 +81,29 @@ def recursive_cluster(
 
     result: dict[int, str] = {}
 
+    # KMeans mode: single-pass flat clustering, no recursion
+    if cluster_algo == "kmeans":
+        log.info("KMeans mode: single-pass clustering (max_iterations=%d ignored)", max_iterations)
+        labels, _ = reduce_and_cluster(
+            embeddings,
+            n_components=umap_n_components,
+            n_neighbors=umap_n_neighbors,
+            min_dist=umap_min_dist,
+            metric=umap_metric,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            algo="kmeans",
+            kmeans_k=kmeans_k,
+        )
+        for i, label in enumerate(labels):
+            if label == -1:
+                # Should not happen in KMeans mode (no noise concept), but be defensive
+                result[i] = ""
+            else:
+                result[i] = _build_prefix([label])
+        return result
+
+    # HDBSCAN mode: existing stack-based recursive clustering
     # Stack entries: (list_of_indices, current_depth, label_path_so_far)
     stack: list[tuple[list[int], int, list[int]]] = [(list(range(n_samples)), 0, [])]
 
@@ -84,6 +127,7 @@ def recursive_cluster(
             metric=umap_metric,
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
+            algo="hdbscan",
         )
 
         # Group by cluster label
@@ -111,12 +155,14 @@ def reduce_and_cluster(
     metric: str = "cosine",
     min_cluster_size: int = 3,
     min_samples: int = 1,
+    algo: str = "hdbscan",
+    kmeans_k: int = 8,
 ) -> tuple[np.ndarray, dict]:
-    """Reduce dims with UMAP, then cluster with HDBSCAN.
+    """Reduce dims with UMAP, then cluster with HDBSCAN or KMeans.
 
     Returns (labels, metrics_dict) where metrics = {dbcv, n_clusters, n_outliers}.
+    For KMeans, dbcv is always 0.0 and n_outliers is always 0.
     """
-    import hdbscan
     import umap
 
     n_samples = len(embeddings)
@@ -163,7 +209,28 @@ def reduce_and_cluster(
     reduced = reducer.fit_transform(embeddings)
     log.info("UMAP reduced shape: %s", reduced.shape)
 
+    # Dispatch to algorithm
+    if algo == "kmeans":
+        labels = _cluster_kmeans(reduced, k=kmeans_k)
+        n_clusters = len(set(labels))
+        metrics = {
+            "dbcv": 0.0,
+            "n_clusters": n_clusters,
+            "n_outliers": 0,
+        }
+        log.info(
+            "KMeans clustering complete: %d clusters",
+            n_clusters,
+        )
+        # Log cluster size distribution
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        for label, count in zip(unique_labels, counts):
+            log.info("  cluster_%d: %d images", label, count)
+        return labels, metrics
+
     # HDBSCAN clustering
+    import hdbscan
+
     log.info(
         "Clustering with HDBSCAN (min_cluster_size=%d, min_samples=%d) ...",
         min_cluster_size,
@@ -214,7 +281,7 @@ def reduce_and_cluster(
 
     # Log cluster size distribution
     unique_labels, counts = np.unique(labels, return_counts=True)
-    for label, count in zip(unique_labels, counts, strict=False):
+    for label, count in zip(unique_labels, counts):
         if label == -1:
             log.info("  noise: %d images", count)
         else:

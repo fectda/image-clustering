@@ -1,4 +1,4 @@
-"""Photo Organizer — CLI tool for visual clustering using vision embeddings + UMAP + HDBSCAN."""
+"""Photo Organizer — CLI tool for visual clustering using vision embeddings + UMAP + HDBSCAN/KMeans."""
 
 import logging
 import sys
@@ -38,10 +38,16 @@ def organize_photos(
     recursive: bool = True,
     no_gallery: bool = False,
     output_mode: str = "flat",
+    cluster_passes: int | None = None,
+    cluster_algo: str = "kmeans",
+    kmeans_k: int = 8,
 ) -> None:
-    """Full pipeline: scan → embed → recursive_cluster → [clip_fallback] → export → gallery."""
+    """Full pipeline: scan → embed → cluster → [clip_fallback] → export → gallery."""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
+
+    # cluster_passes aliases max_iterations if both are provided
+    passes = cluster_passes if cluster_passes is not None else max_iterations
 
     # Phase 1: Scan
     images = scan_images(input_dir, recursive=recursive)
@@ -74,17 +80,19 @@ def organize_photos(
     prefixes = recursive_cluster(
         embeddings,
         images,
-        max_iterations=max_iterations,
+        max_iterations=passes,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         umap_n_components=umap_n_components,
         umap_n_neighbors=umap_n_neighbors,
         umap_min_dist=umap_min_dist,
         umap_metric=umap_metric,
+        cluster_algo=cluster_algo,
+        kmeans_k=kmeans_k,
     )
 
     # Phase 4b: CLIP fallback for residual noise images
-    if clip_fallback:
+    if clip_fallback and cluster_algo == "hdbscan":
         if backend == "clip":
             log.info("Primary model is already CLIP-based, skipping CLIP fallback.")
         else:
@@ -97,6 +105,10 @@ def organize_photos(
                 classify_noise_with_clip(images, prefixes, device=device)
             else:
                 log.info("No residual noise images — skipping CLIP fallback.")
+    elif cluster_algo == "kmeans":
+        log.info("KMeans mode: no noise concept, skipping CLIP fallback.")
+    elif not clip_fallback:
+        log.info("CLIP fallback disabled by --no-clip-fallback.")
 
     # Phase 5: Export
     if dry_run:
@@ -136,6 +148,7 @@ def main():
             model=args.model,
             batch_size=args.batch_size,
             max_iterations=args.max_iterations,
+            cluster_passes=args.cluster_passes,
             min_cluster_size=args.min_cluster_size,
             min_samples=args.min_samples,
             clip_fallback=args.clip_fallback,
@@ -148,6 +161,8 @@ def main():
             recursive=not args.no_recursive_search,
             no_gallery=args.no_gallery,
             output_mode=args.output_mode,
+            cluster_algo=args.cluster_algo,
+            kmeans_k=args.kmeans_k,
         )
     except ScanError as exc:
         log.error(str(exc))

@@ -88,6 +88,7 @@ def _run_pipeline(input_dir, output_dir, recursive=True, **kwargs):
             str(input_dir),
             str(output_dir),
             recursive=recursive,
+            cluster_algo="hdbscan",
             **kwargs,
         )
         return mock_gallery
@@ -151,6 +152,7 @@ class TestIntegrationNoRecursiveSearch:
                 str(tmp_path / "src"),
                 str(output_dir),
                 recursive=False,
+                cluster_algo="hdbscan",
             )
 
         # Root image exported
@@ -202,6 +204,7 @@ class TestIntegrationCollisionProtection:
             organize_photos(
                 str(src_dir),
                 str(output_dir),
+                cluster_algo="hdbscan",
             )
 
         # Both files present
@@ -210,3 +213,76 @@ class TestIntegrationCollisionProtection:
         # Originals moved
         assert not images[0].exists()
         assert not images[1].exists()
+
+
+class TestIntegrationKMeansMode:
+    """--cluster-algo kmeans — flat single-pass clustering."""
+
+    def test_kmeans_creates_clusters(self, tmp_path):
+        """KMeans mode: all images assigned to flat c{k}_ prefixes."""
+        from photo_organizer.main import organize_photos
+
+        src_dir = tmp_path / "src"
+        paths = []
+        for i in range(6):
+            p = src_dir / f"img_{i}.jpg"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
+            paths.append(p)
+
+        output_dir = tmp_path / "out"
+
+        # Mock: 6 images → KMeans with k=2
+        mock_embeddings = np.random.rand(6, 128).astype(np.float32)
+
+        with (
+            patch("photo_organizer.main.load_model", return_value=("m", "p", "cpu", "cpu")),
+            patch("photo_organizer.main.extract_embeddings", return_value=(mock_embeddings, paths)),
+            patch("photo_organizer.main.recursive_cluster") as mock_rc,
+            patch("photo_organizer.main.classify_noise_with_clip"),
+            patch("photo_organizer.main.generate_flat_gallery"),
+        ):
+            organize_photos(
+                str(src_dir),
+                str(output_dir),
+                cluster_algo="kmeans",
+                kmeans_k=2,
+            )
+
+        # Verify recursive_cluster was called with KMeans params
+        mock_rc.assert_called_once()
+        call_kwargs = mock_rc.call_args[1]
+        assert call_kwargs.get("cluster_algo") == "kmeans"
+        assert call_kwargs.get("kmeans_k") == 2
+
+    def test_kmeans_skips_clip_fallback(self, tmp_path):
+        """KMeans mode: clip_fallback is skipped since there's no noise concept."""
+        from photo_organizer.main import organize_photos
+
+        src_dir = tmp_path / "src"
+        p = src_dir / "photo.jpg"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
+
+        output_dir = tmp_path / "out"
+
+        mock_embeddings = np.random.rand(1, 128).astype(np.float32)
+        images = [p]
+
+        with (
+            patch("photo_organizer.main.load_model", return_value=("m", "p", "cpu", "cpu")),
+            patch(
+                "photo_organizer.main.extract_embeddings", return_value=(mock_embeddings, images)
+            ),
+            patch("photo_organizer.main.recursive_cluster", return_value={0: "c0_"}),
+            patch("photo_organizer.main.classify_noise_with_clip") as mock_clip,
+            patch("photo_organizer.main.generate_flat_gallery"),
+        ):
+            organize_photos(
+                str(src_dir),
+                str(output_dir),
+                cluster_algo="kmeans",
+            )
+
+        # CLIP fallback should be skipped for KMeans
+        mock_clip.assert_not_called()

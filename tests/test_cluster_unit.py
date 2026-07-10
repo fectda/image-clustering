@@ -111,6 +111,7 @@ class TestReduceAndCluster:
             np.random.rand(100, 5120).astype(np.float64),
             n_components=20,
             n_neighbors=40,
+            algo="hdbscan",
         )
 
         assert len(labels_out) == 100
@@ -136,6 +137,7 @@ class TestReduceAndCluster:
         labels_out, metrics = reduce_and_cluster(
             np.random.rand(50, 5120).astype(np.float64),
             min_cluster_size=15,
+            algo="hdbscan",
         )
 
         assert np.all(labels_out == -1)
@@ -157,7 +159,7 @@ class TestReduceAndCluster:
         mock_clusterer.fit_predict.return_value = np.zeros(50, dtype=int)
         mock_hdbscan_mod.HDBSCAN.return_value = mock_clusterer
 
-        _, metrics = reduce_and_cluster(np.random.rand(50, 5120).astype(np.float64))
+        _, metrics = reduce_and_cluster(np.random.rand(50, 5120).astype(np.float64), algo="hdbscan")
 
         assert metrics["n_clusters"] == 1
         assert metrics["dbcv"] == 0.0
@@ -179,6 +181,7 @@ class TestReduceAndCluster:
         labels_out, metrics = reduce_and_cluster(
             np.random.rand(5, 5120).astype(np.float64),
             n_neighbors=40,  # would be 40 but min_neighbors caps to 4
+            algo="hdbscan",
         )
 
         # Verify UMAP was called with adjusted n_neighbors
@@ -505,7 +508,9 @@ class TestRecursiveCluster:
         paths = [f"img_{i}.jpg" for i in range(6)]
 
         # max_iterations=1: only depth 0 processed → terminal with c0_
-        result = recursive_cluster(embeddings, paths, max_iterations=1, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=1, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         # All 6 images should get prefix "c0_"
         assert len(result) == 6
@@ -547,7 +552,9 @@ class TestRecursiveCluster:
         paths = [f"img_{i}.jpg" for i in range(10)]
 
         # max_iterations=2: depth 0 + depth 1 processed, depth 2 is terminal
-        result = recursive_cluster(embeddings, paths, max_iterations=2, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=2, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         # First 4 images (in child cluster 0 at depth 1): "c0_c0_"
         # Next 4 images (in child cluster 1 at depth 1): "c0_c1_"
@@ -576,7 +583,9 @@ class TestRecursiveCluster:
 
         # min_cluster_size=5: cluster 0 (3) and cluster 1 (3) are below threshold
         # → no children pushed → only depth 0 processed
-        result = recursive_cluster(embeddings, paths, max_iterations=3, min_cluster_size=5)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=3, min_cluster_size=5, cluster_algo="hdbscan"
+        )
 
         # Only 1 UMAP call (depth 0), clusters 0 and 1 both < min_cluster_size=5
         # so they are terminal with their depth-0 prefix
@@ -605,7 +614,9 @@ class TestRecursiveCluster:
         paths = [f"img_{i}.jpg" for i in range(10)]
 
         # max_iterations=1: only depth 0 processed (depth 0 < max_iterations=1)
-        result = recursive_cluster(embeddings, paths, max_iterations=1, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=1, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         # Only 1 UMAP call
         assert mock_reducer.fit_transform.call_count == 1
@@ -629,7 +640,9 @@ class TestRecursiveCluster:
         embeddings = np.random.rand(6, 5120).astype(np.float64)
         paths = [f"img_{i}.jpg" for i in range(6)]
 
-        result = recursive_cluster(embeddings, paths, max_iterations=3, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=3, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         # All noise → all get empty prefix
         for idx in range(6):
@@ -663,7 +676,9 @@ class TestRecursiveCluster:
         embeddings = np.random.rand(10, 5120).astype(np.float64)
         paths = [f"img_{i}.jpg" for i in range(10)]
 
-        result = recursive_cluster(embeddings, paths, max_iterations=3, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=3, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         # Only 2 UMAP calls: depth 0 + depth 1 (no more after all-noise sub-group)
         assert call_count[0] == 2
@@ -681,6 +696,190 @@ class TestRecursiveCluster:
         embeddings = np.array([]).reshape(0, 5120)
         paths = []
 
-        result = recursive_cluster(embeddings, paths, max_iterations=3, min_cluster_size=2)
+        result = recursive_cluster(
+            embeddings, paths, max_iterations=3, min_cluster_size=2, cluster_algo="hdbscan"
+        )
 
         assert result == {}
+
+
+# ─── KMeans tests ───────────────────────────────────────────────
+
+
+@pytest.fixture()
+def mock_kmeans_deps():
+    """Mock sklearn KMeans and umap for _cluster_kmeans testing."""
+    mock_umap_mod = MagicMock()
+    mock_kmeans_mod = MagicMock()
+
+    saved = {}
+    for key in ("umap", "sklearn.cluster"):
+        saved[key] = sys.modules.get(key)
+
+    sys.modules["umap"] = mock_umap_mod
+    sys.modules["sklearn.cluster"] = mock_kmeans_mod
+
+    yield mock_umap_mod, mock_kmeans_mod
+
+    for key, original in saved.items():
+        if original is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = original
+
+
+class TestClusterKMeans:
+    """_cluster_kmeans() with mocked sklearn KMeans — operates on already-reduced data."""
+
+    def test_creates_k_clusters(self, mock_kmeans_deps):
+        """100 samples, k=5 → 5 cluster labels."""
+        from photo_organizer.cluster import _cluster_kmeans
+
+        _, mock_kmeans_mod = mock_kmeans_deps
+
+        # Mock KMeans
+        mock_kmeans = MagicMock()
+        mock_kmeans.fit_predict.return_value = np.array(
+            [0] * 20 + [1] * 20 + [2] * 20 + [3] * 20 + [4] * 20
+        )
+        mock_kmeans_mod.KMeans.return_value = mock_kmeans
+
+        # _cluster_kmeans takes already-reduced embeddings (UMAP done upstream)
+        reduced = np.random.rand(100, 20).astype(np.float64)
+        labels = _cluster_kmeans(reduced, k=5)
+
+        assert len(labels) == 100
+        assert len(set(labels)) == 5
+
+    def test_small_dataset(self, mock_kmeans_deps):
+        """5 samples, k=2 → 2 cluster labels."""
+        from photo_organizer.cluster import _cluster_kmeans
+
+        _, mock_kmeans_mod = mock_kmeans_deps
+
+        mock_kmeans = MagicMock()
+        mock_kmeans.fit_predict.return_value = np.array([0, 0, 1, 1, 0])
+        mock_kmeans_mod.KMeans.return_value = mock_kmeans
+
+        reduced = np.random.rand(5, 20).astype(np.float64)
+        labels = _cluster_kmeans(reduced, k=2)
+
+        assert len(labels) == 5
+        assert len(set(labels)) == 2
+
+    def test_k_greater_than_samples(self, mock_kmeans_deps):
+        """k > n_samples → clamped to n_samples."""
+        from photo_organizer.cluster import _cluster_kmeans
+
+        _, mock_kmeans_mod = mock_kmeans_deps
+
+        mock_kmeans = MagicMock()
+        mock_kmeans.fit_predict.return_value = np.array([0, 1, 2])
+        mock_kmeans_mod.KMeans.return_value = mock_kmeans
+
+        reduced = np.random.rand(3, 20).astype(np.float64)
+        labels = _cluster_kmeans(reduced, k=10)
+
+        assert len(labels) == 3
+        # KMeans clamped: min(10, max(2, 3-1)) = min(10, 2) = 2 (k must be < n_samples)
+        call_kwargs = mock_kmeans_mod.KMeans.call_args[1]
+        assert call_kwargs["n_clusters"] == 2
+
+
+class TestRecursiveClusterKMeans:
+    """recursive_cluster() with cluster_algo='kmeans' — single pass, no recursion."""
+
+    def test_kmeans_single_pass(self, mock_cluster_deps):
+        """KMeans mode: single clustering pass, flat c{k}_ prefixes."""
+        from photo_organizer.cluster import recursive_cluster
+
+        mock_umap_mod, mock_hdbscan_mod, _ = mock_cluster_deps
+
+        mock_reducer = MagicMock()
+        mock_reducer.fit_transform.side_effect = lambda emb: np.random.rand(len(emb), 20).astype(
+            np.float64
+        )
+        mock_umap_mod.UMAP.return_value = mock_reducer
+
+        # KMeans shouldn't use HDBSCAN at all
+        embeddings = np.random.rand(10, 5120).astype(np.float64)
+        paths = [f"img_{i}.jpg" for i in range(10)]
+
+        # Mock sklearn KMeans inside recursive_cluster
+        import sys
+
+        saved_kmeans = sys.modules.get("sklearn.cluster")
+        mock_kmeans_mod = MagicMock()
+        mock_kmeans = MagicMock()
+        mock_kmeans.fit_predict.return_value = np.array([0] * 3 + [1] * 3 + [2] * 4)
+        mock_kmeans_mod.KMeans.return_value = mock_kmeans
+        sys.modules["sklearn.cluster"] = mock_kmeans_mod
+
+        try:
+            result = recursive_cluster(
+                embeddings,
+                paths,
+                cluster_algo="kmeans",
+                kmeans_k=3,
+                min_cluster_size=2,
+            )
+
+            assert len(result) == 10
+            # All images get flat cluster prefixes (no hierarchy, no noise)
+            assert result[0] == "c0_"
+            assert result[2] == "c0_"
+            assert result[3] == "c1_"
+            assert result[5] == "c1_"
+            assert result[6] == "c2_"
+            assert result[9] == "c2_"
+
+            # HDBSCAN should NOT have been called
+            mock_hdbscan_mod.HDBSCAN.assert_not_called()
+        finally:
+            if saved_kmeans is not None:
+                sys.modules["sklearn.cluster"] = saved_kmeans
+            else:
+                sys.modules.pop("sklearn.cluster", None)
+
+    def test_kmeans_fewer_images(self, mock_cluster_deps):
+        """KMeans mode with fewer images than k → clamped."""
+        from photo_organizer.cluster import recursive_cluster
+
+        mock_umap_mod, mock_hdbscan_mod, _ = mock_cluster_deps
+
+        mock_reducer = MagicMock()
+        mock_reducer.fit_transform.side_effect = lambda emb: np.random.rand(len(emb), 20).astype(
+            np.float64
+        )
+        mock_umap_mod.UMAP.return_value = mock_reducer
+
+        embeddings = np.random.rand(3, 5120).astype(np.float64)
+        paths = [f"img_{i}.jpg" for i in range(3)]
+
+        import sys
+
+        saved_kmeans = sys.modules.get("sklearn.cluster")
+        mock_kmeans_mod = MagicMock()
+        mock_kmeans = MagicMock()
+        mock_kmeans.fit_predict.return_value = np.array([0, 0, 1])
+        mock_kmeans_mod.KMeans.return_value = mock_kmeans
+        sys.modules["sklearn.cluster"] = mock_kmeans_mod
+
+        try:
+            result = recursive_cluster(
+                embeddings,
+                paths,
+                cluster_algo="kmeans",
+                kmeans_k=8,
+                min_cluster_size=2,
+            )
+
+            assert len(result) == 3
+            # KMeans clamped to max(2, 3-1) = 2 clusters
+            call_kwargs = mock_kmeans_mod.KMeans.call_args[1]
+            assert call_kwargs["n_clusters"] == 2
+        finally:
+            if saved_kmeans is not None:
+                sys.modules["sklearn.cluster"] = saved_kmeans
+            else:
+                sys.modules.pop("sklearn.cluster", None)

@@ -15,10 +15,13 @@ set -euo pipefail
 #   --no-gallery      Skip HTML gallery generation
 #   --no-recursive-search  Only scan root of input directory
 #   --output-mode [flat|folders]  Output structure (default: flat)
+#   --cluster-algo [hdbscan|kmeans]  Clustering algorithm (default: kmeans)
+#   --cluster-passes N  Maximum clustering passes (default: 3)
+#   --kmeans-k N  Number of clusters for k-means (default: 8)
 #   --no-faces        Skip face detection (placeholder)
 #   --model           Vision model: dinov2-large (default), dinov2-base, clip, siglip, hybrid
 #   --umap-components N  UMAP target dimensions (default: 20)
-#   --min-cluster-size N  HDBSCAN minimum cluster size (default: 15)
+#   --min-cluster-size N  HDBSCAN minimum cluster size (default: 3)
 #
 # SMB/CIFS support:
 #   Use --input "smb://server/share/path" to mount a network share.

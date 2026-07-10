@@ -88,6 +88,7 @@ class TestOrganizePhotosNoGallery:
                 str(tmp_path / "src"),
                 str(output_dir),
                 no_gallery=True,
+                cluster_algo="hdbscan",
             )
 
         # Gallery should NOT be called
@@ -111,6 +112,7 @@ class TestOrganizePhotosNoGallery:
             organize_photos(
                 str(tmp_path / "src"),
                 str(output_dir),
+                cluster_algo="hdbscan",
             )
 
         mock_gallery.assert_called_once()
@@ -135,6 +137,7 @@ class TestOrganizePhotosOutputModeFolders:
                 str(tmp_path / "src"),
                 str(output_dir),
                 output_mode="folders",
+                cluster_algo="hdbscan",
             )
 
         # Folders mode: c0/photo1.jpg, not c0_photo1.jpg
@@ -159,6 +162,7 @@ class TestOrganizePhotosOutputModeFolders:
                 str(tmp_path / "src"),
                 str(output_dir),
                 output_mode="flat",
+                cluster_algo="hdbscan",
             )
 
         assert (output_dir / "c0_photo1.jpg").exists()
@@ -196,6 +200,7 @@ class TestOrganizePhotosRecursive:
                 str(src_dir),
                 str(output_dir),
                 recursive=False,
+                cluster_algo="hdbscan",
             )
 
         # Only root image exported
@@ -229,6 +234,7 @@ class TestOrganizePhotosRecursive:
             organize_photos(
                 str(src_dir),
                 str(output_dir),
+                cluster_algo="hdbscan",
             )
 
         # Both images exported

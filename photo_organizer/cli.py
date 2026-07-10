@@ -11,6 +11,14 @@ def positive_int(v: str) -> int:
     return iv
 
 
+def int_at_least_2(v: str) -> int:
+    """Convert to int and validate >= 2."""
+    iv = int(v)
+    if iv < 2:
+        raise argparse.ArgumentTypeError(f"must be >= 2, got {iv}")
+    return iv
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Cluster photos by visual similarity using vision embeddings + UMAP + clustering",
@@ -97,6 +105,27 @@ def parse_args(argv=None):
         type=int,
         default=3,
         help="Maximum recursive clustering depth (default: 3)",
+    )
+    parser.add_argument(
+        "--cluster-algo",
+        choices=["hdbscan", "kmeans"],
+        default="kmeans",
+        dest="cluster_algo",
+        help="Clustering algorithm: hdbscan (hierarchical density-based) or kmeans (flat partitioning) (default: kmeans)",
+    )
+    parser.add_argument(
+        "--cluster-passes",
+        type=positive_int,
+        default=None,
+        dest="cluster_passes",
+        help="Maximum passes for recursive/iterative clustering (default: None, falls back to --max-iterations).",
+    )
+    parser.add_argument(
+        "--kmeans-k",
+        type=int_at_least_2,
+        default=8,
+        dest="kmeans_k",
+        help="Number of clusters for k-means (ignored when --cluster-algo=hdbscan) (default: 8, minimum 2)",
     )
     parser.add_argument(
         "--no-gallery",
